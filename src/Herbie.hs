@@ -4,6 +4,7 @@ module Herbie
     )
     where
 
+import Class
 import DsBinds
 import DsMonad
 import ErrUtils
@@ -12,15 +13,16 @@ import Unique
 import MkId
 import TcRnMonad
 import TcSimplify
--- import HERMIT.Dictionary.GHC
--- import HERMIT.Monad hiding (getHscEnv)
 
 import Language.Haskell.TH (mkName)
+import Data.Char
 import Data.List
 import Data.Maybe
 import System.Process
 
 import Debug.Trace
+import Show
+import Data.IORef
 
 --------------------------------------------------------------------------------
 -- GHC plugin interface
@@ -32,6 +34,8 @@ plugin = defaultPlugin
 
 install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 install _ todo = do
+    dflags <- getDynFlags
+    liftIO $ writeIORef dynFlags_ref dflags
     reinitializeGlobals
     return (CoreDoPluginPass "Herbie" pass : todo)
 
@@ -40,48 +44,232 @@ pass guts = do
     bindsOnlyPass (mapM (modBind guts)) guts
 
 modBind :: ModGuts -> CoreBind -> CoreM CoreBind
+modBind guts bndr@(Rec _) = return bndr
 modBind guts bndr@(NonRec b e) = do
     dflags <- getDynFlags
-    putMsgS $ "Non-recursive binding named " ++ showSDoc dflags (ppr b)
-    e' <- modExpr guts e
+    putMsgS $ "Non-recursive binding named "
+        ++ showSDoc dflags (ppr b)
+        ++ "::"
+        ++ showSDoc dflags (ppr $ varType b)
+    e' <- go [] e
     return $ NonRec b e'
---     return $ NonRec b e
-modBind _ bndr = return bndr
+    where
+        go dicts e = do
+            dflags <- getDynFlags
+            let mparamtype = mkParamType dicts (varType b)
+            case mparamtype of
+                Nothing -> return e
+                Just paramtype -> do
+                    let herbie = expr2herbie dflags paramtype e
+                    case hexpr herbie of
+                        ELeaf e -> case e of
+                            Lam a b -> do
+--                               trace (" Lam a="++showSDoc dflags (ppr a)
+--                                      ++" ; b="{-++showSDoc dflags (ppr b)-}
+--                                      ++" ; dicts="++showSDoc dflags (ppr dicts)) $ do
+                                let dicts' = if (head $ occNameString $ nameOccName $ varName a)=='$'
+                                        then a:dicts
+                                        else dicts
+                                b' <- go dicts' b
+                                return $ Lam a b'
+                            Let a b -> do
+--                             trace (" Let a="++showSDoc dflags (ppr a)
+--                                    ++" ; b="{-++showSDoc dflags (ppr b)-})
+                                b' <- go dicts b
+                                return $ Let a b'
+        --                  FIXME: handling math expressions within function applications is harder
+        --                  because we have to figure out the type of the inner expression somehow
+        --                     App a b -> do
+        --                         a' <- modExpr guts a
+        --                         b' <- modExpr guts b
+        --                         return $ App a' b'
+                            otherwise -> do
+                                putMsgS $ "  not mathexpr: " ++ showSDoc dflags (ppr e)
+                                return e
+                        otherwise -> do
+                            putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
+                            putMsgS $ ""
+                            putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
+                            putMsgS $ ""
+                            putMsgS $ "  before (raw ): "++myshow dflags e
+--                             putMsgS $ "  before (raw ): "++show e
+                            putMsgS $ ""
+                            herbie' <- callHerbie guts e herbie
+                            e' <- herbie2expr herbie'
+                            putMsgS $ "  after  (lisp): "++herbie2lisp dflags herbie'
+                            putMsgS $ ""
+                            putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
+                            putMsgS $ ""
+                            putMsgS $ "  after  (raw ): "++myshow dflags e'
+--                             putMsgS $ "  after  (raw ): "++show e'
+                            putMsgS $ ""
+                            return e'
 
-modExpr :: ModGuts -> Expr Var -> CoreM (Expr Var)
-modExpr guts e = do
+--------------------------------------------------------------------------------
+
+-- | The fields of this type correspond to the sections of a function type.
+--
+-- Must satisfy the invariant that every class in "getCxt" has an associated dictionary in "getDicts".
+data ParamType = ParamType
+    { getQuantifier :: [Var]
+    , getCxt        :: [Type]
+    , getDicts      :: [Var]
+    , getParam      :: Type
+    }
+
+-- | Convert the type of a function into its ParamType representation
+mkParamType :: [Var] -> Type -> Maybe ParamType
+mkParamType dicts t = do
+    let (quantifier,unquantified) = extractQuantifiers t
+        (cxt,uncxt) = extractContext unquantified
+    t' <- extractParam uncxt
+    Just $ ParamType
+        { getQuantifier = quantifier
+        , getCxt        = cxt
+        , getDicts      = dicts
+        , getParam      = t'
+        }
+
+    where
+        extractQuantifiers :: Type -> ([Var],Type)
+        extractQuantifiers t = case splitForAllTy_maybe t of
+            Nothing -> ([],t)
+            Just (a,b) -> (a:as,b')
+                where
+                    (as,b') = extractQuantifiers b
+
+        -- | given unquantified types of the form:
+        --
+        -- > (Num a, Ord a) => a -> a
+        --
+        -- The first element of the returned tuple contains everything to the left of "=>";
+        -- and the second element contains everything to the right.
+        extractContext :: Type -> ([Type],Type)
+        extractContext t = case splitTyConApp_maybe t of
+            Nothing -> ([],t)
+            Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
+                               || not hasCxt
+                then ([],t)
+                else (head xs:cxt',t')
+                where
+                    (cxt',t') = extractContext $ head $ tail xs
+
+                    hasCxt = case classifyPredType $ head xs of
+                        IrredPred _ -> False
+                        _           -> True
+
+        -- | given a function, get the type of the parameters
+        --
+        -- FIXME: should we provide a check to ensure that all parameters match?
+        extractParam :: Type -> Maybe Type
+        extractParam t = case splitTyConApp_maybe t of
+            Nothing -> Nothing
+            Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
+                then Nothing
+                else Just (head xs)
+
+getDictMap :: ParamType -> [(Class,Expr Var)]
+getDictMap pt = nubBy f $ go $ getDictMap0 pt
+    where
+        f (a1,_) (a2,_) = getString a1==getString a2
+
+        go [] = []
+        go (x@(c,dict):xs) = x:go (xs++xs')
+            where
+                xs' = concat $ map constraint2dictMap $ classSCTheta c
+
+                constraint2dictMap t = case classifyPredType t of
+                    ClassPred c' _ -> [(c',dict')]
+                        where
+                            dict' = mkApps (Var (findSelId c' (classAllSelIds c))) [dict]
+                    _ -> []
+
+-- | Given a list of member functions of a class,
+-- return the function that extracts the dictionary corresponding to c.
+findSelId :: Class -> [Var] -> Var
+findSelId c [] = error "findSelId: this shouldn't happen"
+findSelId c (v:vs) = trace ("; c="++getString c++"; v:vs="++show (map getString (v:vs))) $ if isDictSelector c v
+    then v
+    else findSelId c vs
+
+-- | Returns a dictionary map for just the top level cxt of the ParamType.
+-- This is used to seed getDictMap.
+getDictMap0 :: ParamType -> [(Class,Expr Var)]
+getDictMap0 pt = map f $ getClasses pt
+    where
+        f c = case filter (isDict c) $ getDicts pt of
+            []  -> error $ "getDictMap: no dictionary for class "++getString c
+            [x] -> (c,Var x)
+            xs   -> error $ "getDictMap: multiple dictionaries for class "++getString c
+                          ++": "++show (map getString xs)
+
+-- | True only if dict is a dictionary for c
+isDict :: Class -> Var -> Bool
+isDict c dict = getString c == dropWhile go (getString dict)
+    where
+        go x = x=='$'||isLower x||isDigit x
+
+-- | True only if dict is a dictionary selector for c
+isDictSelector :: Class -> Var -> Bool
+isDictSelector c dict = case classifyPredType $ getReturnType $ varType dict of
+    ClassPred c' _ -> trace ("c="++getString c++"; c'="++getString c') $ c==c'
+    _ -> False
+
+getReturnType :: Type -> Type
+getReturnType t = case splitForAllTys t of
+    (_,t') -> go t'
+    where
+        go t = trace ("getReturnType; go="++showSDoc dynFlags (ppr t)) $ case splitTyConApp_maybe t of
+            Just (tycon,[_,t']) -> if getString tycon=="(->)"
+                then go t'
+                else t
+            _ -> t
+
+dictFromParamType :: Class -> ParamType -> CoreM (Maybe (Expr Var))
+dictFromParamType c pt = do
     dflags <- getDynFlags
-    let herbie = expr2herbie dflags e
-    case hexpr herbie of
-        ELeaf e -> case e of
-            Lam a b -> do
-                b' <- modExpr guts b
-                return $ Lam a b'
---             App a b -> do
---                 a' <- modExpr guts a
---                 b' <- modExpr guts b
---                 return $ App a' b'
-            Let a b -> do
-                b' <- modExpr guts b
-                return $ Let a b'
-            otherwise -> do
---                 putMsgS $ "  not mathexpr: " ++ showSDoc dflags (ppr e)
-                return e
-        otherwise -> do
-            putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
---             putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
---             putMsgS $ "  before (raw ): "++myshow dflags e
-            putMsgS $ ""
-            herbie' <- callHerbie guts e herbie
-            e' <- herbie2expr herbie'
-            putMsgS $ "  after  (lisp): "++herbie2lisp dflags herbie'
---             putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
---             putMsgS $ "  after  (raw ): "++myshow dflags e'
-            putMsgS $ ""
-            return e'
+    let dm = getDictMap pt
+    putMsgS $ "getDictMap="++showSDoc dflags (ppr dm)
+    return $ lookup c dm
+
+--     error "poop"
+--     cs <- getClasses pt
+--     case filter (\(c',_) -> c'==c) cs of
+--         [] -> error $ "dictFromParamType: no dict found for class "
+--                      ++(occNameString $ nameOccName $ getName c)
+--         [(_,dict)]-> return $ Just dict
+
+--     mkApps (Var (head (classSCSels ord_class))) [Var ord_dictionary]
+
+getClasses :: ParamType -> [Class]
+getClasses pt = concat $ map go $ getCxt pt
+    where
+        go t = case classifyPredType t of
+            ClassPred c _ -> [c]
+            _ -> []
+
+getSuperClasses :: Class -> [Class]
+getSuperClasses c = c : (nub $ concat $ map getSuperClasses $ concat $ map go $ classSCTheta c)
+    where
+        go t = case classifyPredType t of
+            ClassPred c _ -> [c]
+            _ -> []
 
 --------------------------------------------------------------------------------
 -- utils
+
+getString :: NamedThing a => a -> String
+getString = occNameString . getOccName
+
+lit2rational :: Literal -> Rational
+lit2rational l = case l of
+    MachInt i -> toRational i
+    MachInt64 i -> toRational i
+    MachWord i -> toRational i
+    MachWord64 i -> toRational i
+    MachFloat r -> r
+    MachDouble r -> r
+    LitInteger i _ -> toRational i
 
 var2str :: Var -> String
 var2str = occNameString . occName . varName
@@ -97,7 +285,7 @@ data Herbie = Herbie
     { hexpr :: HerbieExpr
     , binOpType :: Maybe Type
     , monOpType :: Maybe Type
-    , numType :: Type
+    , numType :: ParamType
     , getExprs :: [(String,Expr Var)]
     }
 
@@ -118,8 +306,8 @@ findExpr herbie str = lookup str (getExprs herbie)
 ----------------------------------------
 
 data HerbieExpr
-    = EBinOp Var Type Var HerbieExpr HerbieExpr
-    | EMonOp Var Type Var HerbieExpr
+    = EBinOp Var Type (Expr Var) HerbieExpr HerbieExpr
+    | EMonOp Var Type (Expr Var) HerbieExpr
     | ELit Rational
     | ELeaf (Expr Var)
 
@@ -149,15 +337,15 @@ herbieExpr2expr h = go h
         go (EBinOp op t dict a1 a2) = do
             a1' <- go a1
             a2' <- go a2
-            return $ App (App (App (App (Var op) (Type t)) (Var dict)) a1') a2'
+            return $ App (App (App (App (Var op) (Type t)) dict) a1') a2'
         go (EMonOp op t dict a) = do
             a' <- go a
-            return $ App (App (App (Var op) (Type t)) (Var dict)) a'
+            return $ App (App (App (Var op) (Type t)) dict) a'
         go (ELit r) = return $ mkConApp floatDataCon [mkFloatLit r]
         go (ELeaf e) = return e
 
-expr2herbie :: DynFlags -> Expr Var -> Herbie
-expr2herbie dflags e = Herbie hexpr (maybeHead bintypes) (maybeHead montypes) (getType e) exprs
+expr2herbie :: DynFlags -> ParamType -> Expr Var -> Herbie
+expr2herbie dflags t e = Herbie hexpr (maybeHead bintypes) (maybeHead montypes) t exprs
     where
         (hexpr,bintypes,montypes,exprs) = go e [] [] []
 
@@ -174,7 +362,7 @@ expr2herbie dflags e = Herbie hexpr (maybeHead bintypes) (maybeHead montypes) (g
                 else (ELeaf e,bins,mons, [(expr2str dflags e,e)])
 
         -- all binary operators have this form
-        go e@(App (App (App (App (Var v) (Type _)) (Var dict)) a1) a2) bins mons exprs
+        go e@(App (App (App (App (Var v) (Type _)) dict) a1) a2) bins mons exprs
             = if var2str v `elem` binOpList
                 then let (a1',bins1,mons1,exprs1) = go a1 [] [] []
                          (a2',bins2,mons2,exprs2) = go a2 [] [] []
@@ -182,44 +370,39 @@ expr2herbie dflags e = Herbie hexpr (maybeHead bintypes) (maybeHead montypes) (g
                      in ( EBinOp v t dict a1' a2'
                         , t:bins++bins1++bins2
                         , mons++mons1++mons2
-                        , (var2str v,Var dict):exprs++exprs1++exprs2
+                        , (var2str v,dict):exprs++exprs1++exprs2
                         )
                 else (ELeaf e,bins,mons,[(expr2str dflags e,e)])
 
-        -- all unary operators have this form
-        go e@(App (App (App (Var v) (Type _)) (Var dict)) a) bins mons exprs
-            = if var2str v `elem` monOpList
-                then let (a',bins',mons',exprs') = go a [] [] []
-                         t = varType v
-                     in ( EMonOp v t dict a'
-                        , bins++bins'
-                        , t:mons++mons'
-                        , (var2str v, Var dict):exprs++exprs'
-                        )
-                else (ELeaf e,bins,mons,exprs)
+        -- polymorphic literals created via fromInteger/fromRational
+        go e@(App (App (App (Var v) (Type _)) dict) (Lit l)) bins mons exprs
+            = (ELit $ lit2rational l,bins,mons,exprs)
 
-        -- literals
-        go e@(App (Var _) (Lit l)) bins mons exprs = (ELit r,bins,mons,exprs)
-            where
-                r = case l of
-                    MachFloat r -> r
-                    MachDouble r -> r
+        -- non-polymorphic literals
+        go e@(App (Var _) (Lit l)) bins mons exprs
+            = (ELit $ lit2rational l,bins,mons,exprs)
+
+        -- all unary operators have this form
+        go e@(App (App (App (Var v) (Type _)) dict) a) bins mons exprs
+
+            = {-if var2str v=="fromInteger" || var2str v=="fromRational"
+
+                -- literals constructed from unary operations
+                then error "from*"
+
+                -- normal unary operations
+                else -}if var2str v `elem` monOpList
+                    then let (a',bins',mons',exprs') = go a [] [] []
+                             t = varType v
+                         in ( EMonOp v t dict a'
+                            , bins++bins'
+                            , t:mons++mons'
+                            , (var2str v, dict):exprs++exprs'
+                            )
+                    else (ELeaf e,bins,mons,exprs)
 
         -- everything else
         go e bins mons exprs = (ELeaf e,bins,mons,[(expr2str dflags e,e)])
-
--- | Determine the type of an expression.
--- FIXME: I have no idea if this is the correct way to do this, but it works :)
-getType :: Expr Var -> Type
-getType e = case go e of
-    Just t -> t
-    Nothing -> error "getType: couldn't determine type"
-    where
-        go (Type t) = Just t
-        go (App a1 a2) = case go a1 of
-            Just t -> Just t
-            Nothing -> go a2
-        go _ = Nothing
 
 binOpList = [ "*", "/", "-", "+", "max", "min" ]
 monOpList = [ "cos", "sin", "tan", "log", "sqrt" ]
@@ -295,7 +478,7 @@ herbieStr2herbieExpr guts herbie = go
                     Just (ACoAxiom _) -> error "loopupNameEnv ACoAxiom"
                     Nothing           -> error "lookupNameParentEnv Nothing"
 
-                dictType = mkAppTy classType (numType herbie)
+                dictType = mkAppTy classType (getParam $ numType herbie)
                 dictVar = mkGlobalVar
                     VanillaId
                     (mkSystemName (mkUnique 'z' 76128) (mkVarOcc "herbie_magicvar"))
@@ -303,7 +486,7 @@ herbieStr2herbieExpr guts herbie = go
                     vanillaIdInfo
 
 --             liftIO $ do
---                 putStrLn $ "eps_PTE="++showSDoc dflags (ppr $ eps_PTE eps)
+-- --                 putStrLn $ "eps_PTE="++showSDoc dflags (ppr $ eps_PTE eps)
 --                 putStrLn ""
 --                 putStrLn $ "opstr="++show opstr
 --                 putStrLn $ "className="++showSDoc dflags (ppr classname)
@@ -319,8 +502,11 @@ herbieStr2herbieExpr guts herbie = go
                         , ctev_loc = loc
                         }
                     wCs = mkSimpleWC [nonC]
---                 (x, evBinds) <- solveWantedsTcM wCs
-                evBinds <- simplifyTop wCs
+--                 liftIO $ do
+--                     putStrLn $ "nonC="++showSDoc dflags (ppr nonC)
+--                     putStrLn $ "wCs="++showSDoc dflags (ppr wCs)
+                (x, evBinds) <- solveWantedsTcM wCs
+--                 evBinds <- simplifyTop wCs
                 bnds <- initDsTc $ dsEvBinds evBinds
 --                 liftIO $ do
 --                     putStrLn $ "nonC="++showSDoc dflags (ppr nonC)
@@ -330,116 +516,55 @@ herbieStr2herbieExpr guts herbie = go
 --                     putStrLn $ "x="++showSDoc dflags (ppr x)
                 return bnds
 --             bnds <- runTcM guts . initDsTc $ dsEvBinds xs
-            return $ case bnds of
-                [NonRec _ (Var dict)] -> dict
+            case bnds of
+                [NonRec _ dict] -> return $ dict
                 [] -> --error "no bnds"
-                    case findExpr herbie opstr of
+                    {-case findExpr herbie opstr of
                         Just (Var v) -> v
---             error $ "getDict done " ++ showSDoc dflags (ppr dictType)
-
---             case findExpr herbie opstr of
---                 Just (Var v) -> return v
---                 Nothing -> do
---                     let opname = fst $ lookupNameParent "max"
---                     dflags <- getDynFlags
---                     hscenv <- getHscEnv
---                     eps <- liftIO $ hscEPS hscenv
---                     case lookupNameParentEnv (eps_PTE eps) opname of
---                         Just (AnId v) -> return v
---                         Just (AConLike _) -> error "loopupNameEnv AConLike"
---                         Just (ATyCon   _) -> error "loopupNameEnv ATyCon"
---                         Just (ACoAxiom _) -> error "loopupNameEnv ACoAxiom"
---                         Nothing           -> error "lookupNameParentEnv Nothing"
-
-        {-
-            let opname = lookupNameParent opstr
-            hscenv <- getHscEnv
-            dflags <- getDynFlags
-            eps <- liftIO $ hscEPS hscenv
---             let opvar = case lookupNameParentEnv (eps_PTE eps) opname of
---                     Just (AnId v) -> v
-            let opvar = case findExpr herbie opstr of
-                    Just (Var v) -> v
-            (x,xs) <- runTcM guts $ do
-                loc <- getCtLoc $ GivenOrigin UnkSkol
-                return undefined
-                let predTy = varType opvar
-                    nonC = mkNonCanonical $ CtWanted
-                        { ctev_pred = predTy
-                        , ctev_evar = opvar
-                        , ctev_loc = loc
-                        }
-                    wCs = mkSimpleWC [nonC]
-                (_, bnds) <- solveWantedsTcM wCs
-                return (opvar, bnds)
-            bnds <- runTcM guts . initDsTc $ dsEvBinds xs
-            liftIO $ do
-                putStrLn $ "(mg_rdr_env guts)="++showSDoc dflags (ppr (mg_rdr_env guts))
-                putStrLn $ "x="++showSDoc dflags (ppr x)
-                putStrLn $ "xs="++showSDoc dflags (ppr xs)
---             error "done"
-            return $ case findExpr herbie opstr of
-                Just (Var v) -> v
-        -}
+                        Nothing -> -}
+                        do
+                            let (f,ParentIs p) =  lookupNameParent opstr
+                                c = head $ filter
+                                    (\x -> getOccName x == nameOccName p)
+                                    (concatMap getSuperClasses $ getClasses $ numType herbie)
+--                                 dict =
+                            putMsgS $ "classes="++showSDoc dflags (ppr $ getClasses $ numType herbie)
+                            putMsgS $ "selids="++showSDoc dflags (ppr $ map classSCTheta $ getClasses $ numType herbie)
+                            putMsgS $ "superclasses="++showSDoc dflags (ppr $ map getSuperClasses $ getClasses $ numType herbie)
+                            putMsgS $ "f="++showSDoc dflags (ppr $ f)
+                            putMsgS $ "p="++showSDoc dflags (ppr $ p)
+                            putMsgS $ "c="++showSDoc dflags (ppr $ c)
+                            putMsgS $ "dicts="++showSDoc dflags (ppr $ getDicts $ numType herbie)
+                            ret <- dictFromParamType c $ numType herbie
+                            case ret of
+                                Just x -> return x
+--                             error $ "findExpr Nothing: "++showSDoc dflags (ppr $ p)
 
         ----------------------------------------
         -- recursion loop
 
-        go (SLeaf str) = return $ case readMaybe str :: Maybe Double of
-            Just d  -> ELit $ toRational d --ELeaf $ mkConApp floatDataCon [mkFloatLit $ toRational d]
-            Nothing -> ELeaf $ case findExpr herbie str of
-                Just x -> x
-                Nothing -> error $ "herbieStr2herbieExpr: var " ++ str ++ " not in scope"
+        go (SLeaf str) = case readMaybe str :: Maybe Double of
+            Just d  -> return $ ELit $ toRational d
+            Nothing -> do
+                dflags <- getDynFlags
+                return $ ELeaf $ case findExpr herbie str of
+                    Just x -> x
+                    Nothing -> error $ "herbieStr2herbieExpr: var " ++ str ++ " not in scope"
 
         go (SOp [SLeaf opstr, a1, a2]) = do
             a1' <- go a1
             a2' <- go a2
             var <- getVar opstr
             dict <- getDict opstr
-            return $ EBinOp var (numType herbie) dict a1' a2'
+            return $ EBinOp var (getParam $ numType herbie) dict a1' a2'
 
         go (SOp [SLeaf opstr, a]) = do
             a' <- go a
             var <- getVar opstr
             dict <- getDict opstr
-            return $ EMonOp var (numType herbie) dict a'
+            return $ EMonOp var (getParam $ numType herbie) dict a'
 
         go xs = error $ "herbieStr2herbieExpr: expr arity not supported: "++show xs
-
-{-
-        getVar opstr = do
-            let opname = lookupNameParent opstr
---                 tbin = case binOpType herbie of
---                     Just x  -> x
---                     Nothing -> error "BinOp in Herbie output, but not original expression"
---                 dict = case findExpr herbie opstr of
---                     Just (Var v) -> v
---                     otherwise    -> mkGlobalVar VanillaId (lookupNameParent "fNumFloat") tbin vanillaIdInfo
--- --                     otherwise -> case lookupGRE_RdrName (mkRdrUnqual $ mkVarOcc "log") (mg_rdr_env guts) of
--- --                         (x:_) -> error "xxx"
--- --                         _     -> error $ "dictionary not found for: "++opstr
-
-            hscenv <- getHscEnv
-            dflags <- getDynFlags
-            (ty,dict) <- liftIO $ do
-                eps <- hscEPS hscenv
-                let i = case lookupNameParentEnv (eps_PTE eps) opname of
-                        Just (AnId i) -> i
-                        otherwise -> error $ "herbieStr2herbieExpr: operator "++opstr++" not in scope"
-                    t = varType i
---
-                let (ClassPred c [tvar]) = classifyPredType $ snd . splitAppTy . fst . splitAppTy $ dropForAlls t
---                     dict' = mkDictSelId (varName $ getTyVar "panic" tvar) c -- dflags dflags -- True n' c :: Id
-                    dict' = mkDictSelId opname c -- dflags dflags -- True n' c :: Id
---                     dict' = undefined -- mkDictSelId ( c -- dflags dflags -- True n' c :: Id
---
-                putStrLn $ "------------ binup -- " ++ showSDoc dflags (ppr c)
-                putStrLn $ "------------ binup -- " ++ showSDoc dflags (ppr tvar)
---
-                return (t,dict')
-
-            return (mkGlobalVar VanillaId opname ty vanillaIdInfo,dict)
-            -}
 
 callHerbie :: ModGuts -> Expr Var -> Herbie -> CoreM Herbie
 callHerbie guts expr herbie = do
@@ -500,34 +625,37 @@ readMaybe = fmap fst . listToMaybe . reads
 -- debugging
 
 myshow :: DynFlags -> Expr Var -> String
-myshow dflags (Var v) = "Var "++showSDoc dflags (ppr v)++"::'"++showSDoc dflags (ppr $ varType v)++"'"
-myshow dflags (Lit l) = "Lit"
-myshow dflags (Type t) = "Type "++showSDoc dflags (ppr t)
-myshow dflags (Coercion l) = "Coercion"
-myshow dflags (App a b) = "App (" ++ myshow dflags a ++ ") ("++myshow dflags b++")"
-myshow dflags (Lam a b) = "Lam (" ++ show a ++ ") ("++myshow dflags b++")"
-myshow dflags (Let a b) = "Let (" ++ show a ++ ") ("++myshow dflags b++")"
-myshow dflags (Cast a b) = "Case (" ++ myshow dflags a ++ ") ("++show b++")"
-myshow dflags (Tick a b) = "Tick (" ++ show a ++ ") ("++myshow dflags b++")"
-myshow dflags (Case a b c d) = "Case ("++myshow dflags a++") ("++show b++") ("++show c++") (LISTOFJUNK)"
--- myshow dflags (Case a b c d) = "Case ("++myshow dflags a++") ("++show b++") ("++show c++") ("++myshow dflags d++")"
+myshow dflags = go 1
+    where
+        go i (Var v) = "Var "++showSDoc dflags (ppr v)++"::"++showSDoc dflags (ppr $ varType v)
+        go i (Lit l) = "Lit"
+        go i (Type t) = "Type "++showSDoc dflags (ppr t)
+        go i (Coercion l) = "Coercion"
+        go i (Lam a b) = "Lam (" ++ show a ++ ") ("++go (i+1) b++")"
+        go i (Let a b) = "Let (" ++ show a ++ ") ("++go (i+1) b++")"
+        go i (Cast a b) = "Case (" ++ go (i+1) a ++ ") ("++show b++")"
+        go i (Tick a b) = "Tick (" ++ show a ++ ") ("++go (i+1) b++")"
+        go i (Case a b c d) = "Case ("++go (i+1) a++") ("++show b++") ("++show c++") (LISTOFJUNK)"
+        go i (App a b) = "App\n"++white++"(" ++ go (i+1) a ++ ")\n"++white++"("++go (i+1) b++")\n"++drop 4 white
+            where
+                white=replicate (4*i) ' '
 
-instance Show (Coercion) where
-    show _ = "Coercion"
-
-instance Show b => Show (Bind b) where
-    show _ = "Bind"
-
-instance Show (Tickish Id) where
-    show _ = "(Tickish Id)"
-
-instance Show Type where
-    show _ = "Type"
-
-instance Show AltCon where
-    show _ = "AltCon"
-
-instance Show Var where
-    show v = "name"
+-- instance Show (Coercion) where
+--     show _ = "Coercion"
+--
+-- instance Show b => Show (Bind b) where
+--     show _ = "Bind"
+--
+-- instance Show (Tickish Id) where
+--     show _ = "(Tickish Id)"
+--
+-- instance Show Type where
+--     show _ = "Type"
+--
+-- instance Show AltCon where
+--     show _ = "AltCon"
+--
+-- instance Show Var where
+--     show v = "name"
 
 
