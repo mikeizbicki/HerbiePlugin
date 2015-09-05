@@ -89,18 +89,18 @@ modBind guts bndr@(NonRec b e) = do
                         otherwise -> do
                             putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
                             putMsgS $ ""
-                            putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
-                            putMsgS $ ""
-                            putMsgS $ "  before (raw ): "++myshow dflags e
+--                             putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
+--                             putMsgS $ ""
+--                             putMsgS $ "  before (raw ): "++myshow dflags e
 --                             putMsgS $ "  before (raw ): "++show e
                             putMsgS $ ""
                             herbie' <- callHerbie guts e herbie
                             e' <- herbie2expr herbie'
                             putMsgS $ "  after  (lisp): "++herbie2lisp dflags herbie'
                             putMsgS $ ""
-                            putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
-                            putMsgS $ ""
-                            putMsgS $ "  after  (raw ): "++myshow dflags e'
+--                             putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
+--                             putMsgS $ ""
+--                             putMsgS $ "  after  (raw ): "++myshow dflags e'
 --                             putMsgS $ "  after  (raw ): "++show e'
                             putMsgS $ ""
                             return e'
@@ -181,14 +181,14 @@ getDictMap pt = nubBy f $ go $ getDictMap0 pt
                 constraint2dictMap t = case classifyPredType t of
                     ClassPred c' _ -> [(c',dict')]
                         where
-                            dict' = mkApps (Var (findSelId c' (classAllSelIds c))) [dict]
+                            dict' = mkApps (Var (findSelId c' (classAllSelIds c))) [Type $ getParam pt, dict]
                     _ -> []
 
 -- | Given a list of member functions of a class,
 -- return the function that extracts the dictionary corresponding to c.
 findSelId :: Class -> [Var] -> Var
 findSelId c [] = error "findSelId: this shouldn't happen"
-findSelId c (v:vs) = trace ("; c="++getString c++"; v:vs="++show (map getString (v:vs))) $ if isDictSelector c v
+findSelId c (v:vs) = if isDictSelector c v
     then v
     else findSelId c vs
 
@@ -212,14 +212,14 @@ isDict c dict = getString c == dropWhile go (getString dict)
 -- | True only if dict is a dictionary selector for c
 isDictSelector :: Class -> Var -> Bool
 isDictSelector c dict = case classifyPredType $ getReturnType $ varType dict of
-    ClassPred c' _ -> trace ("c="++getString c++"; c'="++getString c') $ c==c'
+    ClassPred c' _ -> c==c'
     _ -> False
 
 getReturnType :: Type -> Type
 getReturnType t = case splitForAllTys t of
     (_,t') -> go t'
     where
-        go t = trace ("getReturnType; go="++showSDoc dynFlags (ppr t)) $ case splitTyConApp_maybe t of
+        go t = case splitTyConApp_maybe t of
             Just (tycon,[_,t']) -> if getString tycon=="(->)"
                 then go t'
                 else t
@@ -229,7 +229,7 @@ dictFromParamType :: Class -> ParamType -> CoreM (Maybe (Expr Var))
 dictFromParamType c pt = do
     dflags <- getDynFlags
     let dm = getDictMap pt
-    putMsgS $ "getDictMap="++showSDoc dflags (ppr dm)
+--     putMsgS $ "getDictMap="++showSDoc dflags (ppr dm)
     return $ lookup c dm
 
 --     error "poop"
@@ -528,13 +528,13 @@ herbieStr2herbieExpr guts herbie = go
                                     (\x -> getOccName x == nameOccName p)
                                     (concatMap getSuperClasses $ getClasses $ numType herbie)
 --                                 dict =
-                            putMsgS $ "classes="++showSDoc dflags (ppr $ getClasses $ numType herbie)
-                            putMsgS $ "selids="++showSDoc dflags (ppr $ map classSCTheta $ getClasses $ numType herbie)
-                            putMsgS $ "superclasses="++showSDoc dflags (ppr $ map getSuperClasses $ getClasses $ numType herbie)
-                            putMsgS $ "f="++showSDoc dflags (ppr $ f)
-                            putMsgS $ "p="++showSDoc dflags (ppr $ p)
-                            putMsgS $ "c="++showSDoc dflags (ppr $ c)
-                            putMsgS $ "dicts="++showSDoc dflags (ppr $ getDicts $ numType herbie)
+--                             putMsgS $ "classes="++showSDoc dflags (ppr $ getClasses $ numType herbie)
+--                             putMsgS $ "selids="++showSDoc dflags (ppr $ map classSCTheta $ getClasses $ numType herbie)
+--                             putMsgS $ "superclasses="++showSDoc dflags (ppr $ map getSuperClasses $ getClasses $ numType herbie)
+--                             putMsgS $ "f="++showSDoc dflags (ppr $ f)
+--                             putMsgS $ "p="++showSDoc dflags (ppr $ p)
+--                             putMsgS $ "c="++showSDoc dflags (ppr $ c)
+--                             putMsgS $ "dicts="++showSDoc dflags (ppr $ getDicts $ numType herbie)
                             ret <- dictFromParamType c $ numType herbie
                             case ret of
                                 Just x -> return x

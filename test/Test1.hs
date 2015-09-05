@@ -1,10 +1,11 @@
 {-# LANGUAGE GADTs,RebindableSyntax #-}
-module Main
+-- module Main
+module Test1
     where
 
--- import SubHask
--- import qualified Prelude as P
-import Prelude as P
+import SubHask
+import qualified Prelude as P
+-- import Prelude as P
 
 --------------------------------------------------------------------------------
 -- type signature tests
@@ -36,17 +37,32 @@ import Prelude as P
 -- types_diff2 :: Float -> Float -> Double
 -- types_diff2 = undefined
 --
+-- types_diff3 :: (a -> b) -> (a -> b) -> (a -> c)
+-- types_diff3 = undefined
 
 --------------------------------------------------------------------------------
 
-types_diff3 :: (a -> b) -> (a -> b) -> (a -> c)
-types_diff3 = undefined
+-- class Num a => Cat a where
+--     foo :: a -> a
+-- instance Cat Float where
+--     foo = id
+--
+-- class Cat a => Dog a where
+--     bar :: a -> a
+--     bar2 :: a -> a
+-- instance Dog Float where
+--     bar = id
+--     bar2 = id
 
-{-# NOINLINE test1 #-}
-test1 :: (Floating a) => a -> a
+-- {-# NOINLINE f #-}
+-- f :: Ord a => a -> Bool
+-- f x = x == x
+
+-- {-# NOINLINE test1 #-}
+test1 :: Real a => a -> a
 -- test1 :: Float -> Float
-test1 x1 = x1+x1
--- test1 x1 = sqrt (x1+1) - sqrt x1
+-- test1 x1 = x1+x1
+test1 x1 = sqrt (x1+1) - sqrt x1
 
 --------------------------------------------------------------------------------
 -- main
@@ -55,5 +71,5 @@ main = do
 
 --     P.putStrLn $ "types_Int  ="++show (types_Int   5)
 --     P.putStrLn $ "types_Float="++show (types_Float 5)
---     P.putStrLn $ "test1="++show (test1 (5::Float))
+    P.putStrLn $ "test="++show (test1 (5::Double))
     P.putStrLn "done"
