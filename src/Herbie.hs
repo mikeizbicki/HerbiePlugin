@@ -11,6 +11,7 @@ import ErrUtils
 import GhcPlugins
 import Unique
 import MkId
+import PrelNames
 import TcRnMonad
 import TcSimplify
 
@@ -89,7 +90,7 @@ modBind guts bndr@(NonRec b e) = do
                             putMsgS $ ""
 --                             putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
 --                             putMsgS $ ""
---                             putMsgS $ "  before (raw ): "++myshow dflags e
+                            putMsgS $ "  before (raw ): "++myshow dflags e
 --                             putMsgS $ "  before (raw ): "++show e
                             putMsgS $ ""
                             e' <- callHerbie guts e herbie
@@ -98,7 +99,7 @@ modBind guts bndr@(NonRec b e) = do
                             putMsgS $ ""
 --                             putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
 --                             putMsgS $ ""
---                             putMsgS $ "  after  (raw ): "++myshow dflags e'
+                            putMsgS $ "  after  (raw ): "++myshow dflags e'
 --                             putMsgS $ "  after  (raw ): "++show e'
                             putMsgS $ ""
                             return e'
@@ -266,10 +267,9 @@ expr2str dflags e       = "expr_" ++ (decorate $ showSDoc dflags (ppr e))
         decorate :: String -> String
         decorate = map go
             where
-                go ' ' = '_'
-                go '@' = '_'
-                go '$' = '_'
-                go x   = x
+                go x = if not (isAlphaNum x) --x `elem` " @$()%':\"{}[]\n\t"
+                    then '_'
+                    else x
 
 lit2rational :: Literal -> Rational
 lit2rational l = case l of
@@ -332,18 +332,45 @@ mathExpr2expr guts herbie = go (hexpr herbie)
             dict <- getDict opstr
             return $ App (App (App (Var op) (Type t)) dict) a'
 
-        -- leaf nodes
-        go (ELeaf str) = case readMaybe str :: Maybe Double of
+        -- leaf is a numeric literal
+        go (ELit r) = do
+            from <- getVar guts "fromRational"
+            fromDict <- getDict "fromRational"
+            -- FIXME: the type of the "to" variable is wrong (it's too polymorphic),
+            -- but I'm not sure the best way to fix it and GHC doesn't seem to care.
+            to <- getVar guts "toRational"
+            toDict <- do
+                maybeDict <- getDictConcrete guts "toRational" doubleTy
+                case maybeDict of
+                    Just x -> return x
 
-            -- leaf is a numeric literal
-            Just d  -> return $ mkConApp floatDataCon [mkFloatLit $ toRational d]
+            return $ App
+                (App
+                    (App
+                        (Var from )
+                        (Type $ getParam $ numType herbie)
+                    )
+                    fromDict
+                )
+                (App
+                    (App
+                        (App
+                            (Var to ) -- $ setVarType to $ mkFunTy doubleTy $ mkTyConTy $ mkFunTyCon rationalTyConName anyKind)
+                            (Type doubleTy)
+                        )
+                        toDict
+                    )
+                    (mkConApp doubleDataCon [mkDoubleLit r] )
+                )
 
-            -- leaf is any other expression
-            Nothing -> do
-                dflags <- getDynFlags
-                return $ case findExpr herbie str of
-                    Just x -> x
-                    Nothing -> error $ "mathExpr2expr: var " ++ str ++ " not in scope"
+        -- leaf is any other expression
+        go (ELeaf str) = do
+            dflags <- getDynFlags
+            return $ case findExpr herbie str of
+                Just x -> x
+                Nothing -> error $ "mathExpr2expr: var " ++ str ++ " not in scope"
+                    ++"; in scope vars="++show (map fst $ getExprs herbie)
+
 
 ----------------------------------------
 
@@ -374,20 +401,20 @@ expr2herbie dflags t e = MathInfo hexpr t exprs
 
         -- polymorphic literals created via fromInteger/fromRational
         go e@(App (App (App (Var v) (Type _)) dict) (Lit l)) exprs
-            = (ELeaf $ show (fromRational $ lit2rational l :: Double),exprs)
+            = (ELit $ lit2rational l, exprs)
 
         -- non-polymorphic literals
         go e@(App (Var _) (Lit l)) exprs
-            = (ELeaf $ show (fromRational $ lit2rational l :: Double),exprs)
+            = (ELit $ lit2rational l, exprs)
 
         -- all unary operators have this form
         go e@(App (App (App (Var v) (Type _)) dict) a) exprs
             = if var2str v `elem` monOpList
-                    then let (a',exprs') = go a []
-                         in ( EMonOp (var2str v) a'
-                            , exprs++exprs'
-                            )
-                    else (ELeaf $ expr2str dflags e,exprs)
+                then let (a',exprs') = go a []
+                     in ( EMonOp (var2str v) a'
+                        , exprs++exprs'
+                        )
+                else (ELeaf $ expr2str dflags e,(expr2str dflags e,e):exprs)
 
         -- everything else
         go e exprs = (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
@@ -461,8 +488,12 @@ getDictPolymorphic guts opstr pt = do
             (\x -> getOccName x == nameOccName p)
             (concatMap getSuperClasses $ getClasses pt)
             of
-          [x] -> x
-          xs -> error $ "xs="++show (length xs)
+          (x:_) -> x
+          [] -> error $ "getDictPolymorphic: could not find parent"
+            ++"\n  ; opstr="++opstr
+            ++"\n  ; f="++occNameString (nameOccName f)
+            ++"\n  ; p="++occNameString (nameOccName p)
+            ++"\n  ; superclasses="++show (map getString $ concatMap getSuperClasses $ getClasses pt)
     dictFromParamType c pt
 
 --------------------------------------------------------------------------------
@@ -481,6 +512,8 @@ callHerbie guts expr herbie = do
     putMsgS $ "lispstr'=" ++ lispstr'
     let herbie' = herbie { hexpr = str2mathExpr lispstr' }
     mathExpr2expr guts herbie'
+--     let herbie' = herbie { hexpr = str2mathExpr "(+ x1 2.2)" }
+--     mathExpr2expr guts herbie'
 
 execHerbie :: String -> IO String
 execHerbie lisp = do
@@ -532,9 +565,6 @@ runTcM guts tcm = do
     where
         pprErrMsgBag = pprErrMsgBagWithLoc
 
-readMaybe :: Read a => String -> Maybe a
-readMaybe = fmap fst . listToMaybe . reads
-
 --------------------------------------------------------------------------------
 -- debugging
 
@@ -542,6 +572,13 @@ myshow :: DynFlags -> Expr Var -> String
 myshow dflags = go 1
     where
         go i (Var v) = "Var "++showSDoc dflags (ppr v)++"::"++showSDoc dflags (ppr $ varType v)
+        go i (Lit (MachFloat  l  )) = "FloatLiteral "  ++show (fromRational l :: Double)
+        go i (Lit (MachDouble l  )) = "DoubleLiteral " ++show (fromRational l :: Double)
+        go i (Lit (MachInt    l  )) = "IntLiteral "    ++show (fromIntegral l :: Double)
+        go i (Lit (MachInt64  l  )) = "Int64Literal "  ++show (fromIntegral l :: Double)
+        go i (Lit (MachWord   l  )) = "WordLiteral "   ++show (fromIntegral l :: Double)
+        go i (Lit (MachWord64 l  )) = "Word64Literal " ++show (fromIntegral l :: Double)
+        go i (Lit (LitInteger l _)) = "IntegerLiteral "++show (fromIntegral l :: Double)
         go i (Lit l) = "Lit"
         go i (Type t) = "Type "++showSDoc dflags (ppr t)
         go i (Coercion l) = "Coercion"
@@ -570,6 +607,6 @@ instance Show AltCon where
     show _ = "AltCon"
 
 instance Show Var where
-    show v = "name"
+    show v = getString v
 
 
