@@ -10,54 +10,6 @@ import qualified Prelude as P
 --------------------------------------------------------------------------------
 -- type signature tests
 
-----------------------------------------
--- these functions should be ignored
-
--- types_Int :: Int -> Int
--- types_Int x1 = 1+x1
-
-----------------------------------------
--- these functions should be processed
-
--- types_Float :: Float -> Float
--- types_Float x1 = 1+x1
---
--- types_big1 :: (a -> Float) -> (a -> Float) -> (a -> Float)
--- types_big1 = undefined
---
--- types_big2 :: (Real a, VectorSpace a) => a -> a
--- types_big2 = undefined
---
--- types_many :: (a -> b) -> (a -> b) -> (a -> b)
--- types_many = undefined
---
--- types_diff1 :: a -> b
--- types_diff1 = undefined
---
--- types_diff2 :: Float -> Float -> Double
--- types_diff2 = undefined
---
--- types_diff3 :: (a -> b) -> (a -> b) -> (a -> c)
--- types_diff3 = undefined
-
---------------------------------------------------------------------------------
-
--- class Num a => Cat a where
---     foo :: a -> a
--- instance Cat Float where
---     foo = id
---
--- class Cat a => Dog a where
---     bar :: a -> a
---     bar2 :: a -> a
--- instance Dog Float where
---     bar = id
---     bar2 = id
-
--- {-# NOINLINE f #-}
--- f :: Ord a => a -> Bool
--- f x = x == x
-
 #define f1(x1) (sqrt ((x1)+1) - sqrt (x1))
 
 -- -- {-# NOINLINE test1 #-}
@@ -85,6 +37,9 @@ test5 str x1 = show $ f1(x1)
 
 test6 :: (Show a, Real a) => a -> String -> String
 test6 x1 str = show $ f1(x1)
+
+test7 :: Semigroup a => a -> a
+test7 x1 = x1+x1+x1+x1+x1
 
 --------------------------------------------------------------------------------
 -- main

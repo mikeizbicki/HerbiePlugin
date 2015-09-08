@@ -19,6 +19,8 @@ import Data.Ratio
 
 import Stabalize.MathExpr
 
+import Prelude
+
 -- | The fields of this type correspond to the sections of a function type.
 --
 -- Must satisfy the invariant that every class in "getCxt" has an associated dictionary in "getDicts".

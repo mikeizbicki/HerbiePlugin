@@ -24,9 +24,6 @@ import Stabalize.MathInfo
 
 import Prelude
 
---------------------------------------------------------------------------------
--- GHC plugin interface
-
 plugin :: Plugin
 plugin = defaultPlugin
     { installCoreToDos = install
@@ -41,13 +38,17 @@ pass :: ModGuts -> CoreM ModGuts
 pass guts = do
     bindsOnlyPass (mapM (modBind guts)) guts
 
+-- | This function gets run on each binding on the Haskell source file.
 modBind :: ModGuts -> CoreBind -> CoreM CoreBind
 modBind guts bndr@(Rec _) = return bndr
 modBind guts bndr@(NonRec b e) = do
     e' <- go [] e
     return $ NonRec b e'
     where
-        -- recursively finds math expressions and replaces them with numerically stable versions
+        -- Recursively descend into the expression e.
+        -- For each math expression we find, run Herbie on it.
+        -- We need to save each dictionary we find because
+        -- it might be needed to create the replacement expressions.
         go dicts e = do
             dflags <- getDynFlags
             case mkMathInfo dflags dicts (varType b) e of
@@ -89,15 +90,18 @@ modBind guts bndr@(NonRec b e) = do
 --                     putMsgS $ "  before (raw ): "++myshow dflags e
 --                     putMsgS $ "  before (raw ): "++show e
 --                     putMsgS $ ""
-                    e' <- callHerbie guts e mathInfo
+--                     StabilizerResult _ e' _ _ <- callHerbie guts e mathInfo
+--                     e' <- stabilizeMathInfo guts mathInfo
+                    res <- liftIO $ stabilizeMathExpr $ hexpr mathInfo
+                    let mathInfo' = mathInfo { hexpr = cmdout res }
+                    e' <- mathInfo2expr guts mathInfo'
                     let Just mathInfo' = mkMathInfo dflags dicts (varType b) e'
+                    putMsgS $ "           "++show (errin res)++" bits of error"
                     putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
+                    putMsgS $ "           "++show (errout res)++" bits of error"
 --                     putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
 --                     putMsgS $ ""
 --                     putMsgS $ "  after  (raw ): "++myshow dflags e'
 --                     putMsgS $ "  after  (raw ): "++show e'
 --                     putMsgS $ ""
                     return e'
-
-
-
