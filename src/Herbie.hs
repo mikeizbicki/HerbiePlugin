@@ -19,6 +19,7 @@ import Language.Haskell.TH (mkName)
 import Data.Char
 import Data.List
 import Data.Maybe
+import Data.Ratio
 import System.Process
 
 import Debug.Trace
@@ -50,59 +51,60 @@ pass guts = do
 modBind :: ModGuts -> CoreBind -> CoreM CoreBind
 modBind guts bndr@(Rec _) = return bndr
 modBind guts bndr@(NonRec b e) = do
-    dflags <- getDynFlags
-    putMsgS $ "Non-recursive binding named "
-        ++ showSDoc dflags (ppr b)
-        ++ "::"
-        ++ showSDoc dflags (ppr $ varType b)
     e' <- go [] e
     return $ NonRec b e'
     where
+        -- recursively finds math expressions and replaces them with numerically stable versions
         go dicts e = do
             dflags <- getDynFlags
-            let mparamtype = mkParamType dicts (varType b)
-            case mparamtype of
-                Nothing -> return e
-                Just paramtype -> do
-                    let herbie = expr2herbie dflags paramtype e
-                    case hexpr herbie of
-                        ELeaf _ -> case e of
-                            Lam a b -> do
-                                let dicts' = if (head $ occNameString $ nameOccName $ varName a)=='$'
-                                        then a:dicts
-                                        else dicts
-                                b' <- go dicts' b
-                                return $ Lam a b'
-                            Let a b -> do
-                                b' <- go dicts b
-                                return $ Let a b'
-        --                  FIXME: handling math expressions within function applications is harder
-        --                  because we have to figure out the type of the inner expression somehow
-        --                     App a b -> do
-        --                         a' <- modExpr guts a
-        --                         b' <- modExpr guts b
-        --                         return $ App a' b'
-                            otherwise -> do
-                                putMsgS $ "  not mathexpr: " ++ showSDoc dflags (ppr e)
-                                return e
-                        otherwise -> do
-                            putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
-                            putMsgS $ ""
---                             putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
---                             putMsgS $ ""
-                            putMsgS $ "  before (raw ): "++myshow dflags e
---                             putMsgS $ "  before (raw ): "++show e
-                            putMsgS $ ""
-                            e' <- callHerbie guts e herbie
-                            let herbie' = expr2herbie dflags paramtype e'
-                            putMsgS $ "  after  (lisp): "++herbie2lisp dflags herbie'
-                            putMsgS $ ""
---                             putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
---                             putMsgS $ ""
-                            putMsgS $ "  after  (raw ): "++myshow dflags e'
---                             putMsgS $ "  after  (raw ): "++show e'
-                            putMsgS $ ""
-                            return e'
+            case mkMathInfo dflags dicts (varType b) e of
+
+                -- not a math expression, so recurse into subexpressions
+                Nothing -> case e of
+                    Lam a b -> do
+                        let dicts' = if (head $ occNameString $ nameOccName $ varName a)=='$'
+                                then a:dicts
+                                else dicts
+                        b' <- go dicts' b
+                        return $ Lam a b'
+                    Let a b -> do
+                        b' <- go dicts b
+                        return $ Let a b'
+                    App a b -> do
+                        a' <- go dicts a
+                        b' <- go dicts b
+                        return $ App a' b'
+                    otherwise -> do
+--                         putMsgS $ "  not mathexpr: " ++ showSDoc dflags (ppr e)
+                        return e
+
+                -- we found a math expression, so process it
+                Just mathInfo -> do
+                    putMsgS $ "Found math expression within binding "
+                        ++ showSDoc dflags (ppr b)
+                        ++ "::"
+                        ++ showSDoc dflags (ppr $ varType b)
+                    putMsgS $ "  type   = "++showSDoc dflags (ppr $ getParam $ numType mathInfo)
+                    putMsgS $ "  before = "++herbie2lisp dflags mathInfo
+--                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
+
+--                     putMsgS $ "    expression "++herbie2lisp dflags herbie
+--                     putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
+--                     putMsgS $ ""
+--                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
+--                     putMsgS $ ""
+--                     putMsgS $ "  before (raw ): "++myshow dflags e
+--                     putMsgS $ "  before (raw ): "++show e
+--                     putMsgS $ ""
+                    e' <- callHerbie guts e mathInfo
+                    let Just mathInfo' = mkMathInfo dflags dicts (varType b) e'
+                    putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
+--                     putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
+--                     putMsgS $ ""
+--                     putMsgS $ "  after  (raw ): "++myshow dflags e'
+--                     putMsgS $ "  after  (raw ): "++show e'
+--                     putMsgS $ ""
+                    return e'
 
 --------------------------------------------------------------------------------
 
@@ -167,6 +169,7 @@ mkParamType dicts t = do
                 then Nothing
                 else Just (head xs)
 
+-- | Returns a map associating classes with dictionaries for the given type
 getDictMap :: ParamType -> [(Class,Expr Var)]
 getDictMap pt = nubBy f $ go $ getDictMap0 pt
     where
@@ -267,7 +270,7 @@ expr2str dflags e       = "expr_" ++ (decorate $ showSDoc dflags (ppr e))
         decorate :: String -> String
         decorate = map go
             where
-                go x = if not (isAlphaNum x) --x `elem` " @$()%':\"{}[]\n\t"
+                go x = if not (isAlphaNum x)
                     then '_'
                     else x
 
@@ -334,33 +337,33 @@ mathExpr2expr guts herbie = go (hexpr herbie)
 
         -- leaf is a numeric literal
         go (ELit r) = do
-            from <- getVar guts "fromRational"
-            fromDict <- getDict "fromRational"
-            -- FIXME: the type of the "to" variable is wrong (it's too polymorphic),
-            -- but I'm not sure the best way to fix it and GHC doesn't seem to care.
-            to <- getVar guts "toRational"
-            toDict <- do
-                maybeDict <- getDictConcrete guts "toRational" doubleTy
-                case maybeDict of
-                    Just x -> return x
+            fromRationalVar <- getVar guts "fromRational"
+            fromRationalDict <- getDict "fromRational"
+
+            -- FIXME: the type of `ratioConVar` is wrong,
+            -- but I'm not sure how to fix it and GHC doesn't seem to care.
+            let ratioConVar = mkGlobalVar VanillaId ratioDataConName (varType fromRationalVar) vanillaIdInfo
+
+            integerTyCon <- lookupTyCon integerTyConName
+            let integerTy = mkTyConTy integerTyCon
 
             return $ App
                 (App
                     (App
-                        (Var from )
+                        (Var fromRationalVar )
                         (Type $ getParam $ numType herbie)
                     )
-                    fromDict
+                    fromRationalDict
                 )
                 (App
                     (App
                         (App
-                            (Var to ) -- $ setVarType to $ mkFunTy doubleTy $ mkTyConTy $ mkFunTyCon rationalTyConName anyKind)
-                            (Type doubleTy)
+                            (Var ratioConVar )
+                            (Type integerTy)
                         )
-                        toDict
+                        (Lit $ LitInteger (numerator r) integerTy)
                     )
-                    (mkConApp doubleDataCon [mkDoubleLit r] )
+                    (Lit $ LitInteger (denominator r) integerTy)
                 )
 
         -- leaf is any other expression
@@ -371,17 +374,40 @@ mathExpr2expr guts herbie = go (hexpr herbie)
                 Nothing -> error $ "mathExpr2expr: var " ++ str ++ " not in scope"
                     ++"; in scope vars="++show (map fst $ getExprs herbie)
 
-
 ----------------------------------------
 
-expr2herbie :: DynFlags -> ParamType -> Expr Var -> MathInfo
-expr2herbie dflags t e = MathInfo hexpr t exprs
+mkMathInfo :: DynFlags -> [Var] -> Type -> Expr Var -> Maybe MathInfo
+mkMathInfo dflags dicts bndType e = case validType of
+    Nothing -> Nothing
+    Just t -> Just $ MathInfo hexpr (pt { getParam = t}) exprs
     where
         (hexpr,exprs) = go e []
 
+        -- this should never return Nothing if validType is not Nothing
+        Just pt = mkParamType dicts bndType
+
+        -- We only return a MathInfo if the input is a math expression.
+        -- We look at the first function call to determine if it is a math expression or not.
+        validType = case e of
+            -- first function is binary
+            (App (App (App (App (Var v) (Type t)) _) _) _) -> if var2str v `elem` binOpList
+                then Just t
+                else Nothing
+
+            -- first function is unary
+            (App (App (App (Var v) (Type t)) _) _) -> if var2str v `elem` monOpList
+                then Just t
+                else Nothing
+
+            -- first function is anything else means that we're not a math expression
+            _ -> Nothing
+
+        -- recursively converts the `Expr Var` into a MathExpr and a dictionary
         go :: Expr Var
            -> [(String,Expr Var)]
-           -> (MathExpr,[(String,Expr Var)])
+           -> (MathExpr
+              ,[(String,Expr Var)]
+              )
 
         -- we need to special case the $ operator for when MathExpr is run before any rewrite rules
         go e@(App (App (App (App (Var v) (Type _)) (Type _)) a1) a2) exprs
@@ -389,7 +415,20 @@ expr2herbie dflags t e = MathInfo hexpr t exprs
                 then go (App a1 a2) exprs
                 else (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
 
-        -- all binary operators have this form
+        -- polymorphic literals created via fromInteger
+        go e@(App (App (App (Var v) (Type _)) dict) (Lit l)) exprs
+            = (ELit $ lit2rational l, exprs)
+
+        -- polymorphic literals created via fromRational
+        go e@(App (App (App (Var v) (Type _)) dict)
+             (App (App (App (Var _) (Type _)) (Lit l1)) (Lit l2))) exprs
+            = (ELit $ lit2rational l1 / lit2rational l2, exprs)
+
+        -- non-polymorphic literals
+        go e@(App (Var _) (Lit l)) exprs
+            = (ELit $ lit2rational l, exprs)
+
+        -- binary operators
         go e@(App (App (App (App (Var v) (Type _)) dict) a1) a2) exprs
             = if var2str v `elem` binOpList
                 then let (a1',exprs1) = go a1 []
@@ -399,15 +438,7 @@ expr2herbie dflags t e = MathInfo hexpr t exprs
                         )
                 else (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
 
-        -- polymorphic literals created via fromInteger/fromRational
-        go e@(App (App (App (Var v) (Type _)) dict) (Lit l)) exprs
-            = (ELit $ lit2rational l, exprs)
-
-        -- non-polymorphic literals
-        go e@(App (Var _) (Lit l)) exprs
-            = (ELit $ lit2rational l, exprs)
-
-        -- all unary operators have this form
+        -- unary operators
         go e@(App (App (App (Var v) (Type _)) dict) a) exprs
             = if var2str v `elem` monOpList
                 then let (a',exprs') = go a []
@@ -445,7 +476,7 @@ getVar guts opstr = do
 
 -- | Given a function name and concrete type, get the needed dictionary.
 getDictConcrete :: ModGuts -> String -> Type -> CoreM (Maybe (Expr CoreBndr))
-getDictConcrete guts opstr t = trace "poly" $ do
+getDictConcrete guts opstr t = do
     hscenv <- getHscEnv
     dflags <- getDynFlags
     eps <- liftIO $ hscEPS hscenv
@@ -460,10 +491,9 @@ getDictConcrete guts opstr t = trace "poly" $ do
         dictType = mkAppTy classType t
         dictVar = mkGlobalVar
             VanillaId
-            (mkSystemName (mkUnique 'z' 76128) (mkVarOcc "herbie_magicvar"))
+            (mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "magicDictionaryName"))
             dictType
             vanillaIdInfo
-
 
     bnds <- runTcM guts $ do
         loc <- getCtLoc $ GivenOrigin UnkSkol
@@ -475,6 +505,16 @@ getDictConcrete guts opstr t = trace "poly" $ do
             wCs = mkSimpleWC [nonC]
         (x, evBinds) <- solveWantedsTcM wCs
         bnds <- initDsTc $ dsEvBinds evBinds
+
+--         liftIO $ do
+--             putStrLn $ "dictType="++showSDoc dflags (ppr dictType)
+--             putStrLn $ "dictVar="++showSDoc dflags (ppr dictVar)
+--
+--             putStrLn $ "nonC="++showSDoc dflags (ppr nonC)
+--             putStrLn $ "wCs="++showSDoc dflags (ppr wCs)
+--             putStrLn $ "bnds="++showSDoc dflags (ppr bnds)
+--             putStrLn $ "x="++showSDoc dflags (ppr x)
+
         return bnds
 
     case bnds of
@@ -509,10 +549,10 @@ callHerbie guts expr herbie = do
     dflags <- getDynFlags
     let lispstr = herbie2lisp dflags herbie
     lispstr' <- liftIO $ execHerbie lispstr
-    putMsgS $ "lispstr'=" ++ lispstr'
+--     putMsgS $ "lispstr'=" ++ lispstr'
     let herbie' = herbie { hexpr = str2mathExpr lispstr' }
     mathExpr2expr guts herbie'
---     let herbie' = herbie { hexpr = str2mathExpr "(+ x1 2.2)" }
+--     let herbie' = herbie { hexpr = str2mathExpr "(+ x1 1.1)" }
 --     mathExpr2expr guts herbie'
 
 execHerbie :: String -> IO String
@@ -578,7 +618,8 @@ myshow dflags = go 1
         go i (Lit (MachInt64  l  )) = "Int64Literal "  ++show (fromIntegral l :: Double)
         go i (Lit (MachWord   l  )) = "WordLiteral "   ++show (fromIntegral l :: Double)
         go i (Lit (MachWord64 l  )) = "Word64Literal " ++show (fromIntegral l :: Double)
-        go i (Lit (LitInteger l _)) = "IntegerLiteral "++show (fromIntegral l :: Double)
+        go i (Lit (LitInteger l t)) = "IntegerLiteral "++show (fromIntegral l :: Double)++
+                                                   "::"++showSDoc dflags (ppr t)
         go i (Lit l) = "Lit"
         go i (Type t) = "Type "++showSDoc dflags (ppr t)
         go i (Coercion l) = "Coercion"
