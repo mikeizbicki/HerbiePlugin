@@ -56,7 +56,9 @@ library
 
   -- Modules included in this library but not exported.
   other-modules:
+    Stabalize.Herbie
     Stabalize.MathExpr
+    Stabalize.MathInfo
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
