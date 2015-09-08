@@ -65,8 +65,10 @@ library
   build-depends:        base >=4.8 && <4.9
                       , ghc
                       , template-haskell
---                       , hermit >= 1.0.0.0
                       , process >= 1.1.0.0
+                      , sqlite-simple
+                      , text
+                      , directory
 
   -- Directories containing source files.
   hs-source-dirs:      src

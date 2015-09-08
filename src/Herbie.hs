@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances,FlexibleContexts,TemplateHaskell #-}
+{-# LANGUAGE FlexibleInstances,FlexibleContexts,TemplateHaskell,OverloadedStrings,ScopedTypeVariables #-}
 module Herbie
     ( plugin
     )
@@ -20,16 +20,21 @@ import Data.Char
 import Data.List
 import Data.Maybe
 import Data.Ratio
+import Data.String
+import System.Directory
 import System.Process
+
+import Control.Exception
+import           Control.Applicative
+import qualified Data.Text as T
+import           Database.SQLite.Simple
+import           Database.SQLite.Simple.FromRow
 
 import Debug.Trace
 
 import Stabalize.MathExpr
 
 import Prelude
-ifThenElse True t f = t
-ifThenElse False t f = f
-
 
 --------------------------------------------------------------------------------
 -- GHC plugin interface
@@ -40,7 +45,7 @@ plugin = defaultPlugin
     }
 
 install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
-install _ todo = do
+install opts todo = do
     reinitializeGlobals
     return (CoreDoPluginPass "MathInfo" pass : todo)
 
@@ -258,40 +263,6 @@ getSuperClasses c = c : (nub $ concat $ map getSuperClasses $ concat $ map go $ 
             _ -> []
 
 --------------------------------------------------------------------------------
--- utils
-
-getString :: NamedThing a => a -> String
-getString = occNameString . getOccName
-
-expr2str :: DynFlags -> Expr Var -> String
-expr2str dflags (Var v) = {-"var_" ++-} var2str v
-expr2str dflags e       = "expr_" ++ (decorate $ showSDoc dflags (ppr e))
-    where
-        decorate :: String -> String
-        decorate = map go
-            where
-                go x = if not (isAlphaNum x)
-                    then '_'
-                    else x
-
-lit2rational :: Literal -> Rational
-lit2rational l = case l of
-    MachInt i -> toRational i
-    MachInt64 i -> toRational i
-    MachWord i -> toRational i
-    MachWord64 i -> toRational i
-    MachFloat r -> r
-    MachDouble r -> r
-    LitInteger i _ -> toRational i
-
-var2str :: Var -> String
-var2str = occNameString . occName . varName
-
-maybeHead :: [a] -> Maybe a
-maybeHead (a:_) = Just a
-maybeHead _     = Nothing
-
---------------------------------------------------------------------------------
 -- convert Expr into MathExpr
 
 data MathInfo = MathInfo
@@ -306,8 +277,8 @@ herbie2lisp dflags herbie = mathExpr2lisp (hexpr herbie)
 findExpr :: MathInfo -> String -> Maybe (Expr Var)
 findExpr herbie str = lookup str (getExprs herbie)
 
-mathExpr2expr :: ModGuts -> MathInfo -> CoreM (Expr CoreBndr)
-mathExpr2expr guts herbie = go (hexpr herbie)
+mathInfo2expr :: ModGuts -> MathInfo -> CoreM (Expr CoreBndr)
+mathInfo2expr guts herbie = go (hexpr herbie)
     where
         t = getParam $ numType herbie
 
@@ -371,8 +342,8 @@ mathExpr2expr guts herbie = go (hexpr herbie)
             dflags <- getDynFlags
             return $ case findExpr herbie str of
                 Just x -> x
-                Nothing -> error $ "mathExpr2expr: var " ++ str ++ " not in scope"
-                    ++"; in scope vars="++show (map fst $ getExprs herbie)
+                Nothing -> error $ "mathInfo2expr: var " ++ str ++ " not in scope"
+                    ++"; in scope vars="++show (nub $ map fst $ getExprs herbie)
 
 ----------------------------------------
 
@@ -449,9 +420,6 @@ mkMathInfo dflags dicts bndType e = case validType of
 
         -- everything else
         go e exprs = (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
-
-binOpList = [ "*", "/", "-", "+", "max", "min" ]
-monOpList = [ "cos", "sin", "tan", "log", "sqrt" ]
 
 ----------------------------------------
 -- get information from the environment
@@ -547,13 +515,20 @@ herbie2cmd dflags herbie = "(herbie-test "++varStr++" \"cmd\" "++herbie2lisp dfl
 callHerbie :: ModGuts -> Expr Var -> MathInfo -> CoreM (Expr CoreBndr)
 callHerbie guts expr herbie = do
     dflags <- getDynFlags
-    let lispstr = herbie2lisp dflags herbie
-    lispstr' <- liftIO $ execHerbie lispstr
---     putMsgS $ "lispstr'=" ++ lispstr'
-    let herbie' = herbie { hexpr = str2mathExpr lispstr' }
-    mathExpr2expr guts herbie'
---     let herbie' = herbie { hexpr = str2mathExpr "(+ x1 1.1)" }
---     mathExpr2expr guts herbie'
+    let (lispstr,varmap) = getCanonicalLispCmd $ hexpr herbie
+    dbResult <- liftIO $ lookupDatabase lispstr
+    lispstr' <- case dbResult of
+        Just x -> do
+            putMsgS "    Found in database."
+            return x
+        Nothing -> do
+            putMsgS "    Not found in database.  Running Herbie..."
+            liftIO $ do
+                res <- execHerbie lispstr
+                insertDatabase lispstr res
+                return res
+    let herbie' = herbie { hexpr = fromCanonicalLispCmd (lispstr',varmap) }
+    mathInfo2expr guts herbie'
 
 execHerbie :: String -> IO String
 execHerbie lisp = do
@@ -563,14 +538,11 @@ execHerbie lisp = do
                           && x/=")"
                           && not (x `elem` binOpList)
                           && not (x `elem` monOpList)
-                          && not (head x `elem` "1234567890")
+                          && not (head x `elem` ("1234567890"::String))
                       ) $ tokenize lisp :: [String]
         varstr = "("++(intercalate " " vars)++")"
         cmd = "(herbie-test "++varstr++" \"cmd\" "++lisp++") \n"
---     putStrLn $ "cmd="++show cmd
     (_,stdout,stderr) <- readProcessWithExitCode "herbie-exec" [] cmd
---     putStrLn $ "stdout="++show stdout
---     putStrLn $ "stderr="++show stderr
     let lisp' = dropWhile (/='(')
               $ drop 1
               $ dropWhile (/='(')
@@ -578,8 +550,6 @@ execHerbie lisp = do
               $ dropWhile (/='(')
               $ take (length stdout-2)
               $ stdout
---     putStrLn $ "lisp'="++show lisp'
---     putStrLn ""
     return lisp'
 
 -- | We just need to add spaces around the parens before calling "words"
@@ -589,6 +559,44 @@ tokenize = words . concat . map go
         go '(' = " ( "
         go ')' = " ) "
         go x   = [x]
+
+----------------------------------------
+
+lookupDatabase :: String -> IO (Maybe String)
+lookupDatabase str = do
+    ret <- try $ do
+        dirname <- getAppUserDataDirectory "Stabalizer"
+        createDirectoryIfMissing True dirname
+        conn <- open $ dirname++"/Stabalizer.db"
+        res <- queryNamed
+            conn
+            "SELECT id,stabilized from StabilizedMap where original = :original"
+            [":original" := str]
+            :: IO [(Int,String)]
+        close conn
+        return $ case res of
+            [x] -> Just $ snd x
+            []  -> Nothing
+    case ret of
+        Left (SomeException e) -> do
+            putStrLn $ "WARNING in lookupDatabase: "++show e
+            return Nothing
+        Right x -> return $ x
+
+insertDatabase :: String -> String -> IO ()
+insertDatabase orig simpl = do
+    ret <- try $ do
+        dirname <- getAppUserDataDirectory "Stabalizer"
+        createDirectoryIfMissing True dirname
+        conn <- open $ dirname++"/Stabalizer.db"
+        execute_ conn "CREATE TABLE IF NOT EXISTS StabilizedMap (id INTEGER PRIMARY KEY, original TEXT UNIQUE NOT NULL, stabilized TEXT NOT NULL)"
+        execute_ conn "CREATE INDEX IF NOT EXISTS StabilizedMapIndex ON StabilizedMap(original)"
+        execute conn "INSERT INTO StabilizedMap (original,stabilized) VALUES (?,?)" (orig,simpl)
+        close conn
+    case ret of
+        Left (SomeException e) -> putStrLn $ "WARNING in insertDatabase: "++show e
+        Right _ -> return ()
+    return ()
 
 --------------------------------------------------------------------------------
 --
@@ -606,8 +614,38 @@ runTcM guts tcm = do
         pprErrMsgBag = pprErrMsgBagWithLoc
 
 --------------------------------------------------------------------------------
--- debugging
+-- utils
 
+getString :: NamedThing a => a -> String
+getString = occNameString . getOccName
+
+expr2str :: DynFlags -> Expr Var -> String
+expr2str dflags (Var v) = {-"var_" ++-} var2str v
+expr2str dflags e       = "expr_" ++ (decorate $ showSDoc dflags (ppr e))
+    where
+        decorate :: String -> String
+        decorate = map go
+            where
+                go x = if not (isAlphaNum x)
+                    then '_'
+                    else x
+
+lit2rational :: Literal -> Rational
+lit2rational l = case l of
+    MachInt i -> toRational i
+    MachInt64 i -> toRational i
+    MachWord i -> toRational i
+    MachWord64 i -> toRational i
+    MachFloat r -> r
+    MachDouble r -> r
+    LitInteger i _ -> toRational i
+
+var2str :: Var -> String
+var2str = occNameString . occName . varName
+
+maybeHead :: [a] -> Maybe a
+maybeHead (a:_) = Just a
+maybeHead _     = Nothing
 myshow :: DynFlags -> Expr Var -> String
 myshow dflags = go 1
     where
