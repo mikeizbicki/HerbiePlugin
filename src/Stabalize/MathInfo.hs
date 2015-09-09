@@ -208,12 +208,18 @@ mathInfo2expr guts herbie = go (hexpr herbie)
             fromRationalVar <- getVar guts "fromRational"
             fromRationalDict <- getDict "fromRational"
 
-            -- FIXME: the type of `ratioConVar` is wrong,
-            -- but I'm not sure how to fix it and GHC doesn't seem to care.
-            let ratioConVar = mkGlobalVar VanillaId ratioDataConName (varType fromRationalVar) vanillaIdInfo
-
             integerTyCon <- lookupTyCon integerTyConName
             let integerTy = mkTyConTy integerTyCon
+
+            -- FIXME: both of these techniques cause core lint to panic
+            ratioTyCon <- lookupTyCon ratioTyConName
+--             let ratioTy = mkAppTy (mkTyConTy ratioTyCon) integerTy
+--                 ratioConTy = mkFunTys [integerTy,integerTy] ratioTy
+            let tmpName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "a")
+                tmpVar = mkGlobalVar VanillaId tmpName liftedTypeKind vanillaIdInfo
+                tmpVarT = mkTyVarTy tmpVar
+                ratioConTy = mkForAllTy tmpVar $ mkFunTys [tmpVarT,tmpVarT] $ mkAppTy (mkTyConTy ratioTyCon) tmpVarT
+                ratioConVar = mkGlobalVar VanillaId ratioDataConName ratioConTy vanillaIdInfo
 
             return $ App
                 (App
