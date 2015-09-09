@@ -8,7 +8,25 @@ import Prelude
 ifThenElse True t f = t
 ifThenElse False t f = f
 
-monOpList = [ "cos", "sin", "tan", "log", "sqrt" ]
+-- other functions: cot, expt, sqr
+-- constants; pi, e
+
+monOpList =
+    [ "cos"
+    , "sin"
+    , "tan"
+    , "acos"
+    , "asin"
+    , "atan"
+    , "cosh"
+    , "sinh"
+    , "tanh"
+    , "exp"
+    , "log"
+    , "sqrt"
+    , "abs"
+    ]
+
 binOpList = [ "/", "-" ] ++ commutativeOpList
 commutativeOpList = [ "*", "+", "max", "min" ]
 
@@ -16,6 +34,7 @@ commutativeOpList = [ "*", "+", "max", "min" ]
 data MathExpr
     = EBinOp String MathExpr MathExpr
     | EMonOp String MathExpr
+    | EIf MathExpr MathExpr MathExpr
     | ELit Rational
     | ELeaf String
     deriving (Show,Eq)
@@ -83,8 +102,12 @@ unCanonicalizeMathExpr (e,xs) = go e
     where
         xs' = map (\(a,b) -> (b,a)) xs
 
-        go (EBinOp op e1 e2) = EBinOp op (go e1) (go e2)
+        -- FIXME: this is a hack to get sqr working
+        go (EMonOp "sqr" e1) = EBinOp "*" (go e1) (go e1)
+
         go (EMonOp op e1) = EMonOp op (go e1)
+        go (EBinOp op e1 e2) = EBinOp op (go e1) (go e2)
+        go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
         go (ELit r) = ELit r
         go (ELeaf str) = case lookup str xs' of
             Just x -> ELeaf x
@@ -96,6 +119,7 @@ mathExpr2lisp = go
     where
         go (EBinOp op a1 a2) = "("++op++" "++go a1++" "++go a2++")"
         go (EMonOp op a) = "("++op++" "++go a++")"
+        go (EIf cond e1 e2) = "(if "++go cond++" "++go e1++" "++go e2++")"
         go (ELit r) = show (fromRational r :: Double)
         go (ELeaf e) = e
 
@@ -103,8 +127,10 @@ mathExpr2lisp = go
 str2mathExpr :: String -> MathExpr
 str2mathExpr ('(':xs) = if length xs > 1 && last xs==')'
     then case groupByParens $ init xs of
-        [op,e1]    -> EMonOp op (str2mathExpr e1)
-        [op,e1,e2] -> EBinOp op (str2mathExpr e1) (str2mathExpr e2)
+        [op,e1]             -> EMonOp op (str2mathExpr e1)
+        [op,e1,e2]          -> EBinOp op (str2mathExpr e1) (str2mathExpr e2)
+        ["if",cond,e1,e2]   -> EIf (str2mathExpr cond) (str2mathExpr e1) (str2mathExpr e2)
+        _                   -> error $ "str2mathExpr: "++xs
     else error $ "str2mathExpr: malformed input '("++xs++"'"
 str2mathExpr xs = case readMaybe xs :: Maybe Double of
     Just x -> ELit $ toRational x

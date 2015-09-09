@@ -23,6 +23,8 @@ import Stabalize.MathExpr
 import Stabalize.MathInfo
 
 import Prelude
+import Show
+import Data.IORef
 
 plugin :: Plugin
 plugin = defaultPlugin
@@ -31,6 +33,8 @@ plugin = defaultPlugin
 
 install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 install opts todo = do
+    dflags <- getDynFlags
+    liftIO $ writeIORef dynFlags_ref dflags
     reinitializeGlobals
     return (CoreDoPluginPass "MathInfo" pass : todo)
 
@@ -42,6 +46,13 @@ pass guts = do
 modBind :: ModGuts -> CoreBind -> CoreM CoreBind
 modBind guts bndr@(Rec _) = return bndr
 modBind guts bndr@(NonRec b e) = do
+    dflags <- getDynFlags
+    putMsgS ""
+    putMsgS $ showSDoc dflags (ppr b)
+        ++ "::"
+        ++ showSDoc dflags (ppr $ varType b)
+    putMsgS $ myshow dflags e
+    return bndr
     e' <- go [] e
     return $ NonRec b e'
     where
@@ -55,19 +66,29 @@ modBind guts bndr@(NonRec b e) = do
 
                 -- not a math expression, so recurse into subexpressions
                 Nothing -> case e of
+
+                    -- Lambda expression:
+                    -- If the variable is a dictionary, add it to the list;
+                    -- Always recurse into the subexpression
                     Lam a b -> do
-                        let dicts' = if (head $ occNameString $ nameOccName $ varName a)=='$'
-                                then a:dicts
-                                else dicts
-                        b' <- go dicts' b
+                        b' <- go (extractDicts a++dicts) b
                         return $ Lam a b'
-                    Let a b -> do
-                        b' <- go dicts b
-                        return $ Let a b'
+
+                    -- Non-recursive let binding:
+                    -- If the variable is a dictionary, add it to the list;
+                    -- Always recurse into the subexpression
+                    Let bndr@(NonRec a _) b -> do
+                        b' <- go (extractDicts a++dicts) b
+                        return $ Let bndr b'
+
+                    -- Function application:
+                    -- Math expressions may appear on either side, so recurse on both
                     App a b -> do
                         a' <- go dicts a
                         b' <- go dicts b
                         return $ App a' b'
+
+                    -- FIXME: needs to be exhaustive
                     otherwise -> do
 --                         putMsgS $ "  not mathexpr: " ++ showSDoc dflags (ppr e)
                         return e
@@ -84,10 +105,10 @@ modBind guts bndr@(NonRec b e) = do
 
 --                     putMsgS $ "    expression "++herbie2lisp dflags herbie
 --                     putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
---                     putMsgS $ ""
---                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
---                     putMsgS $ ""
---                     putMsgS $ "  before (raw ): "++myshow dflags e
+                    putMsgS $ ""
+                    putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
+                    putMsgS $ ""
+                    putMsgS $ "  before (raw ): "++myshow dflags e
 --                     putMsgS $ "  before (raw ): "++show e
 --                     putMsgS $ ""
 --                     StabilizerResult _ e' _ _ <- callHerbie guts e mathInfo
@@ -95,13 +116,23 @@ modBind guts bndr@(NonRec b e) = do
                     res <- liftIO $ stabilizeMathExpr $ hexpr mathInfo
                     let mathInfo' = mathInfo { hexpr = cmdout res }
                     e' <- mathInfo2expr guts mathInfo'
-                    let Just mathInfo' = mkMathInfo dflags dicts (varType b) e'
                     putMsgS $ "           "++show (errin res)++" bits of error"
                     putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
                     putMsgS $ "           "++show (errout res)++" bits of error"
---                     putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
---                     putMsgS $ ""
---                     putMsgS $ "  after  (raw ): "++myshow dflags e'
+                    putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
+                    putMsgS $ ""
+                    putMsgS $ "  after  (raw ): "++myshow dflags e'
 --                     putMsgS $ "  after  (raw ): "++show e'
 --                     putMsgS $ ""
                     return e'
+
+-- | Return a list with the given variable if the variable is a dictionary or tuple of dictionaries,
+-- otherwise return [].
+extractDicts :: Var -> [Var]
+extractDicts v = if (isClassPred $ varType v)
+    then [v]
+    else case splitTyConApp_maybe $ varType v of
+        Just (_,xs) -> if or (map isClassPred xs)
+            then [v]
+            else []
+        Nothing -> []

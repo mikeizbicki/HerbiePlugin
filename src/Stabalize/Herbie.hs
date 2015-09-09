@@ -40,6 +40,8 @@ stabilizeMathExpr :: MathExpr -> IO (StabilizerResult MathExpr)
 stabilizeMathExpr cmdin = do
     let (cmdinLisp,varmap) = getCanonicalLispCmd cmdin
     res <- stabilizeLisp cmdinLisp
+--     putStrLn $ "stabilizeLisp:  "++cmdout res
+--     putStrLn $ "stabilizeLisp': "++mathExpr2lisp (fromCanonicalLispCmd (cmdout res,varmap))
     return $ res
         { cmdin  = cmdin
         , cmdout = fromCanonicalLispCmd (cmdout res,varmap)
@@ -51,7 +53,7 @@ stabilizeMathExpr cmdin = do
 stabilizeLisp :: String -> IO (StabilizerResult String)
 stabilizeLisp cmdin = do
     dbResult <- lookupDatabase cmdin
-    case dbResult of
+    ret <- case dbResult of
         Just x -> do
 --             putStrLn "    Found in database."
             return x
@@ -60,6 +62,16 @@ stabilizeLisp cmdin = do
             res <- execHerbie cmdin
             insertDatabase res
             return res
+    if not $ "(if " `isInfixOf` cmdout ret
+        then return ret
+        else do
+            putStrLn "WARNING: Herbie's output contains if statements, which aren't yet supported"
+            putStrLn "WARNING: Using original numerically unstable equation."
+            return $ ret
+                { errout = errin ret
+                , cmdout = cmdin
+                }
+--     return $ ret { cmdout = "(+ herbie0 herbie1)" }
 
 -- | Run the `herbie` command and return the result
 execHerbie :: String -> IO (StabilizerResult String)

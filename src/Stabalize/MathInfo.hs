@@ -15,11 +15,13 @@ import TcSimplify
 
 import Data.Char
 import Data.List
+import Data.Maybe
 import Data.Ratio
 
 import Stabalize.MathExpr
 
 import Prelude
+import Show
 
 -- | The fields of this type correspond to the sections of a function type.
 --
@@ -43,7 +45,6 @@ mkParamType dicts t = do
         , getDicts      = dicts
         , getParam      = t'
         }
-
     where
         extractQuantifiers :: Type -> ([Var],Type)
         extractQuantifiers t = case splitForAllTy_maybe t of
@@ -82,54 +83,37 @@ mkParamType dicts t = do
                 then Nothing
                 else Just (head xs)
 
--- | Returns a map associating classes with dictionaries for the given type
-getDictMap :: ParamType -> [(Class,Expr Var)]
-getDictMap pt = nubBy f $ go $ getDictMap0 pt
+-- |
+--
+-- FIXME: We could cache the classes we've already visited for potentially large speedup.
+-- Would this prevent infinite loops?
+getDictExprFor :: Class -> Type -> [Expr Var] -> Maybe (Expr Var)
+getDictExprFor c t xs = go xs
     where
-        f (a1,_) (a2,_) = getString a1==getString a2
+        go []     = Nothing
+        go (x:xs) = case x of
+            Var v                   -> processPred $ varType v
+            (App (App (Var v) _) _) -> processPred $ getReturnType $ varType v
 
-        go [] = []
-        go (x@(c,dict):xs) = x:go (xs++xs')
+            a -> error $ "getDictExprFor: "++show a
+
             where
-                xs' = concat $ map constraint2dictMap $ classSCTheta c
+                processPred t = trace ("processPred; t="++showSDoc dynFlags (ppr t)) $
+                  case classifyPredType t of
+                    ClassPred c' _ -> if c==c'
+                        then Just x
+                        else go $ xs++map mkSuperClassDict (classAllSelIds c')
+                    TuplePred xs -> listToMaybe $ concatMap (maybeToList . processPred) xs
+                    IrredPred x -> go xs
+                    EqPred _ _ _ -> error "getDictExprFor: EqPred"
 
-                constraint2dictMap t = case classifyPredType t of
-                    ClassPred c' _ -> [(c',dict')]
-                        where
-                            dict' = mkApps (Var (findSelId c' (classAllSelIds c))) [Type $ getParam pt, dict]
-                    _ -> []
+                mkSuperClassDict selId = App (App (Var selId) (Type t)) x
 
--- | Returns a dictionary map for just the top level cxt of the ParamType.
--- This is used to seed getDictMap.
-getDictMap0 :: ParamType -> [(Class,Expr Var)]
-getDictMap0 pt = map f $ getClasses pt
-    where
-        f c = case filter (isDict c) $ getDicts pt of
-            []  -> error $ "getDictMap: no dictionary for class "++getString c
-            [x] -> (c,Var x)
-            xs   -> error $ "getDictMap: multiple dictionaries for class "++getString c
-                          ++": "++show (map getString xs)
-
--- | Given a list of member functions of a class,
--- return the function that extracts the dictionary corresponding to c.
-findSelId :: Class -> [Var] -> Var
-findSelId c [] = error "findSelId: this shouldn't happen"
-findSelId c (v:vs) = if isDictSelector c v
-    then v
-    else findSelId c vs
-
--- | True only if dict is a dictionary for c
-isDict :: Class -> Var -> Bool
-isDict c dict = getString c == dropWhile go (getString dict)
-    where
-        go x = x=='$'||isLower x||isDigit x
-
--- | True only if dict is a dictionary selector for c
-isDictSelector :: Class -> Var -> Bool
-isDictSelector c dict = case classifyPredType $ getReturnType $ varType dict of
-    ClassPred c' _ -> c==c'
-    _ -> False
-
+-- | Given a type of the form
+--
+-- > A -> ... -> C
+--
+-- returns the type of C
 getReturnType :: Type -> Type
 getReturnType t = case splitForAllTys t of
     (_,t') -> go t'
@@ -140,27 +124,16 @@ getReturnType t = case splitForAllTys t of
                 else t
             _ -> t
 
+
 dictFromParamType :: Class -> ParamType -> CoreM (Maybe (Expr Var))
-dictFromParamType c pt = do
-    dflags <- getDynFlags
-    let dm = getDictMap pt
---     putMsgS $ "getDictMap="++showSDoc dflags (ppr dm)
-    return $ lookup c dm
-
---     error "poop"
---     cs <- getClasses pt
---     case filter (\(c',_) -> c'==c) cs of
---         [] -> error $ "dictFromParamType: no dict found for class "
---                      ++(occNameString $ nameOccName $ getName c)
---         [(_,dict)]-> return $ Just dict
-
---     mkApps (Var (head (classSCSels ord_class))) [Var ord_dictionary]
+dictFromParamType c pt = return $ getDictExprFor c (getParam pt) (map Var $ getDicts pt)
 
 getClasses :: ParamType -> [Class]
 getClasses pt = concat $ map go $ getCxt pt
     where
         go t = case classifyPredType t of
             ClassPred c _ -> [c]
+            TuplePred xs  -> concatMap go xs
             _ -> []
 
 getSuperClasses :: Class -> [Class]
@@ -168,6 +141,7 @@ getSuperClasses c = c : (nub $ concat $ map getSuperClasses $ concat $ map go $ 
     where
         go t = case classifyPredType t of
             ClassPred c _ -> [c]
+            TuplePred xs  -> concatMap go xs
             _ -> []
 
 --------------------------------------------------------------------------------
@@ -198,6 +172,7 @@ mathInfo2expr guts herbie = go (hexpr herbie)
                     ret' <- getDictPolymorphic guts opstr (numType herbie)
                     case ret' of
                         Just x -> return x
+                        Nothing -> error $ "getDict: could not find dictionary for "++opstr
 
         -- binary operators
         go (EBinOp opstr a1 a2) = do
@@ -213,6 +188,20 @@ mathInfo2expr guts herbie = go (hexpr herbie)
             op <- getVar guts opstr
             dict <- getDict opstr
             return $ App (App (App (Var op) (Type t)) dict) a'
+
+        -- if statements
+        go (EIf cond a1 a2) = do
+            cond' <- go cond
+            a1' <- go a1
+            a2' <- go a2
+            return $ Case
+--                 (Var $ trueDataConId)
+                cond'
+                (trueDataConId) -- FIXME: what should this be?
+                t
+                [ (DataAlt falseDataCon, [], a2')
+                , (DataAlt trueDataCon, [], a1')
+                ]
 
         -- leaf is a numeric literal
         go (ELit r) = do
@@ -335,11 +324,14 @@ mkMathInfo dflags dicts bndType e = case validType of
 -- | Converts a String that contains a name of a variable into the compiler's internal representation of that variable.
 getNameParent :: ModGuts -> String -> (Name,Parent)
 getNameParent guts str = case filter isCorrectVar (concat $ occEnvElts (mg_rdr_env guts)) of
-    xs -> (gre_name $ head $ xs, gre_par $ head $ xs)
+    xs -> if length xs>0
+        then (gre_name $ head $ xs, gre_par $ head $ xs)
+        else error $ "getNameParent: '"++str++"'\n"
     where
-        isCorrectVar x = (occNameString $ nameOccName $ gre_name x) == str
+        isCorrectVar x = (getString $ gre_name x) == str
                       && (case gre_par x of NoParent -> False; _ -> True)
 
+-- | Converts a string into a Core variable
 getVar :: ModGuts -> String -> CoreM Var
 getVar guts opstr = do
     let opname = fst $ getNameParent guts opstr
@@ -460,6 +452,7 @@ var2str = occNameString . occName . varName
 maybeHead :: [a] -> Maybe a
 maybeHead (a:_) = Just a
 maybeHead _     = Nothing
+
 myshow :: DynFlags -> Expr Var -> String
 myshow dflags = go 1
     where
@@ -474,32 +467,92 @@ myshow dflags = go 1
                                                    "::"++showSDoc dflags (ppr t)
         go i (Lit l) = "Lit"
         go i (Type t) = "Type "++showSDoc dflags (ppr t)
-        go i (Coercion l) = "Coercion"
-        go i (Lam a b) = "Lam (" ++ show a ++ ") ("++go (i+1) b++")"
-        go i (Let a b) = "Let (" ++ show a ++ ") ("++go (i+1) b++")"
-        go i (Cast a b) = "Case (" ++ go (i+1) a ++ ") ("++show b++")"
         go i (Tick a b) = "Tick (" ++ show a ++ ") ("++go (i+1) b++")"
-        go i (Case a b c d) = "Case ("++go (i+1) a++") ("++show b++") ("++show c++") (LISTOFJUNK)"
-        go i (App a b) = "App\n"++white++"(" ++ go (i+1) a ++ ")\n"++white++"("++go (i+1) b++")\n"++drop 4 white
+        go i (Coercion l) = "Coercion "++myCoercionShow dflags l
+        go i (Cast a b)
+            = "Cast \n"
+            ++white++"(" ++ go (i+1) a ++ ")\n"
+            ++white++"("++myshow dflags (Coercion b)++")\n"
+            ++drop 4 white
+            where
+                white=replicate (4*i) ' '
+        go i (Let (NonRec a e) b)
+            = "Let "++getString a++"::"++showSDoc dflags (ppr $ varType a)++"\n"
+            ++white++"("++go (i+1) b++")\n"
+            ++drop 4 white
+            where
+                white=replicate (4*i) ' '
+        go i (Let _ _) = error "myshow: recursive let"
+        go i (Lam a b)
+            = "Lam "++getString a++"::"++showSDoc dflags (ppr $ varType a)++"\n"
+            ++white++"("++go (i+1) b++")\n"
+            ++drop 4 white
+            where
+                white=replicate (4*i) ' '
+        go i (Case a b c d)
+            = "Case\n"
+            ++white++"("++go (i+1) a++")\n"
+            ++white++"("++show b++"::"++showSDoc dflags (ppr $ varType b)++")\n"
+            ++white++"("++showSDoc dflags (ppr c)++")\n"
+            ++white++"["++concatMap (myAltShow dflags) d++"]\n"
+            ++drop 4 white
+            where
+                white=replicate (4*i) ' '
+        go i (App a b)
+            = "App\n"
+            ++white++"(" ++ go (i+1) a ++ ")\n"
+            ++white++"("++go (i+1) b++")\n"
+            ++drop 4 white
             where
                 white=replicate (4*i) ' '
 
-instance Show (Coercion) where
-    show _ = "Coercion"
+myCoercionShow :: DynFlags -> Coercion -> String
+myCoercionShow dflags c = go c
+    where
+        go (Refl _ _            ) = "Refl"
+        go (TyConAppCo a b c    ) = "TyConAppCo "++showSDoc dflags (ppr a)++" "
+                                                 ++showSDoc dflags (ppr b)++" "
+                                                 ++showSDoc dflags (ppr c)
+        go (AppCo _ _           ) = "AppCo"
+        go (ForAllCo _ _        ) = "ForAllCo"
+        go (CoVarCo _           ) = "CoVarCo"
+        go (AxiomInstCo _ _ _   ) = "AxiomInstCo"
+        go (UnivCo _ _ _ _      ) = "UnivCo"
+        go (SymCo _             ) = "SymCo"
+        go (TransCo _ _         ) = "TransCo"
+        go (AxiomRuleCo _ _ _   ) = "AxiomRuleCo"
+        go (NthCo _ _           ) = "NthCo"
+        go (LRCo _ _            ) = "LRCo"
+        go (InstCo _ _          ) = "InstCo"
+        go (SubCo _             ) = "SubCo"
 
-instance Show b => Show (Bind b) where
-    show _ = "Bind"
+myAltShow :: DynFlags -> Alt Var -> String
+-- myAltShow dflags (con,xs,expr) = "("++con'++", "++xs'++", "++myshow dflags expr++")"
+myAltShow dflags (con,xs,expr) = "("++con'++", "++xs'++", BLAH)"
+    where
+        con' = case con of
+            DataAlt x -> showSDoc dflags (ppr x)
+            LitAlt x  -> showSDoc dflags (ppr x)
+            DEFAULT   -> "DEFAULT"
 
-instance Show (Tickish Id) where
-    show _ = "(Tickish Id)"
+        xs' = showSDoc dflags (ppr xs)
 
-instance Show Type where
-    show _ = "Type"
-
-instance Show AltCon where
-    show _ = "AltCon"
-
-instance Show Var where
-    show v = getString v
+-- instance Show (Coercion) where
+--     show _ = "Coercion"
+--
+-- instance Show b => Show (Bind b) where
+--     show _ = "Bind"
+--
+-- instance Show (Tickish Id) where
+--     show _ = "(Tickish Id)"
+--
+-- instance Show Type where
+--     show _ = "Type"
+--
+-- instance Show AltCon where
+--     show _ = "AltCon"
+--
+-- instance Show Var where
+--     show v = getString v
 
 

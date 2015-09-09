@@ -59,6 +59,7 @@ library
     Stabalize.Herbie
     Stabalize.MathExpr
     Stabalize.MathInfo
+    Show
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
