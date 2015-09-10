@@ -20,6 +20,8 @@ import System.Process
 import Stabalize.MathInfo
 import Stabalize.MathExpr
 
+import Prelude
+
 -- | The result of running Herbie
 data StabilizerResult a = StabilizerResult
     { cmdin  :: !a
@@ -55,23 +57,24 @@ stabilizeLisp cmdin = do
     dbResult <- lookupDatabase cmdin
     ret <- case dbResult of
         Just x -> do
---             putStrLn "    Found in database."
             return x
         Nothing -> do
---             putStrLn "    Not found in database.  Running Herbie..."
+            putStrLn "  Not found in database.  Running Herbie..."
             res <- execHerbie cmdin
             insertDatabase res
             return res
-    if not $ "(if " `isInfixOf` cmdout ret
-        then return ret
-        else do
-            putStrLn "WARNING: Herbie's output contains if statements, which aren't yet supported"
-            putStrLn "WARNING: Using original numerically unstable equation."
-            return $ ret
-                { errout = errin ret
-                , cmdout = cmdin
-                }
---     return $ ret { cmdout = "(+ herbie0 herbie1)" }
+    return ret
+--     if not $ "(if " `isInfixOf` cmdout ret
+--         then return ret
+--         else do
+--             putStrLn "WARNING: Herbie's output contains if statements, which aren't yet supported"
+--             putStrLn "WARNING: Using original numerically unstable equation."
+--             return $ ret
+--                 { errout = errin ret
+--                 , cmdout = cmdin
+--                 }
+    return $ ret { cmdout = "(+ herbie0 herbie1)" }
+--     return $ ret { cmdout = "(if (> herbie0 herbie1) herbie0 herbie1)" }
 
 -- | Run the `herbie` command and return the result
 execHerbie :: String -> IO (StabilizerResult String)
@@ -87,40 +90,43 @@ execHerbie lisp = do
         varstr = "("++(intercalate " " vars)++")"
         stdin = "(herbie-test "++varstr++" \"cmd\" "++lisp++") \n"
 
+    -- launch Herbie with a fixed seed to ensure reproducable builds
+    (_,stdout,stderr) <- readProcessWithExitCode
+        "herbie-exec"
+        [ "-r", "#(1461197085 2376054483 1553562171 1611329376 2497620867 2308122621)" ]
+        stdin
+
+    -- try to parse Herbie's output;
+    -- if we can't parse it, that means Herbie had an error and we should abort gracefully
     ret <- try $ do
-        (_,stdout,stderr) <- readProcessWithExitCode
-            "herbie-exec"
-            [ "-r", "#(1461197085 2376054483 1553562171 1611329376 2497620867 2308122621)" ]
-            stdin
-        let (line2:line3:line4:_) = lines stdout
+        let (line1:line2:line3:_) = lines stdout
         let ret = StabilizerResult
                 { errin
                     = read
                     $ drop 1
                     $ dropWhile (/=':')
-                    $ line2
+                    $ line1
                 , errout
                     = read
                     $ drop 1
                     $ dropWhile (/=':')
-                    $ line3
+                    $ line2
                 , cmdin
                     = lisp
                 , cmdout
-                    = init
-                    $ dropWhile (/='(')
-                    $ drop 1
-                    $ dropWhile (/='(')
-                    $ drop 1
-                    $ dropWhile (/='(')
-                    $ take (length stdout-2)
-                    $ line4
+                    = (!!2)
+                    $ groupByParens
+                    $ init
+                    $ tail
+                    $ line3
                 }
         deepseq ret $ return ret
 
     case ret of
         Left (SomeException e) -> do
             putStrLn $ "WARNING in execHerbie: "++show e
+            putStrLn $ "WARNING in execHerbie: stdin="++stdin
+            putStrLn $ "WARNING in execHerbie: stdout="++stdout
             return $ StabilizerResult
                 { errin  = 0/0
                 , errout = 0/0

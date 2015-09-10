@@ -29,6 +29,8 @@ import IdInfo
 import PrimOp
 import TypeRep
 
+import Prelude
+
 --------------------------------------------------------------------------------
 
 {-# NOINLINE dynFlags_ref #-}

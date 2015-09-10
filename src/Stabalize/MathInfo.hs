@@ -12,6 +12,7 @@ import MkId
 import PrelNames
 import TcRnMonad
 import TcSimplify
+import Type
 
 import Data.Char
 import Data.List
@@ -83,13 +84,13 @@ mkParamType dicts t = do
                 then Nothing
                 else Just (head xs)
 
--- |
---
--- FIXME: We could cache the classes we've already visited for potentially large speedup.
--- Would this prevent infinite loops?
+-- | Given a class, try to calculate a core expression that evaluates to the class's dictionary
 getDictExprFor :: Class -> Type -> [Expr Var] -> Maybe (Expr Var)
-getDictExprFor c t xs = go xs
+getDictExprFor c t = go
     where
+        -- recursively descend into all the available dictionaries
+        -- until we find one for the class
+        go :: [Expr Var] -> Maybe (Expr Var)
         go []     = Nothing
         go (x:xs) = case x of
             Var v                   -> processPred $ varType v
@@ -98,22 +99,69 @@ getDictExprFor c t xs = go xs
             a -> error $ "getDictExprFor: "++show a
 
             where
-                processPred t = trace ("processPred; t="++showSDoc dynFlags (ppr t)) $
-                  case classifyPredType t of
-                    ClassPred c' _ -> if c==c'
+                processPred :: PredType -> Maybe (Expr Var)
+                processPred t = case classifyPredType t of
+
+                    -- What we've found isn't a dictionary, so we should skip it.
+                    IrredPred _ -> go xs
+                    EqPred _ _ _ -> go xs
+
+                    -- We've found a dictionary.
+                    -- If it's the right one, we're done;
+                    -- otherwise: get the dictionary of each superclass by applying the selId,
+                    -- then recurse onto these dictionaries
+                    --
+                    -- FIXME:
+                    -- This causes core Lint to fail.
+                    -- The variables within selId's type are out of scope.
+                    -- I don't understand why.
+                    ClassPred c' [ct] -> if c==c'
                         then Just x
                         else go $ xs++map mkSuperClassDict (classAllSelIds c')
-                    TuplePred xs -> listToMaybe $ concatMap (maybeToList . processPred) xs
-                    IrredPred x -> go xs
-                    EqPred _ _ _ -> error "getDictExprFor: EqPred"
+                            where
+                                mkSuperClassDict selId = App (App (Var selId) (Type t)) x
 
-                mkSuperClassDict selId = App (App (Var selId) (Type t)) x
+                    -- We've found a tuple of dictionaries.
+                    -- For each dictionary we extract it with a Case statement, then recurse
+                    TuplePred xs -> listToMaybe $ mapMaybe tupgo $ zip [0..] xs
+                        where
+                            tupsize = length xs
+
+                            tupgo :: (Int,PredType) -> Maybe (Expr Var)
+                            tupgo (i,t) = case processPred t of
+                                Nothing -> Nothing
+                                Just x -> trace ("tupgo: t="++showSDoc dynFlags (ppr t)
+                                               ++"; xs="++showSDoc dynFlags (ppr xs)) $
+                                    Just $ Case x wildVar t
+                                        [ (DataAlt $ tupleCon ConstraintTuple tupsize
+                                          , tupelems
+                                          , Var $ tupelems !! i
+                                          )
+                                        ]
+                                where
+                                    tupelems =
+                                        [ mkGlobalVar
+                                            VanillaId
+                                            (mkSystemName (mkUnique 'y' j) (mkVarOcc $ "a"++show j))
+                                            t'
+                                             vanillaIdInfo
+
+                                        | (j,t') <- zip [0..] xs
+                                        ]
+
+                                    wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
+                                    wildVar = mkGlobalVar VanillaId wildName t' vanillaIdInfo
+
+                                    t' = case x of
+                                        (Var v) -> varType v
+                                        (App (App (Var v) _) _) -> varType v
+
 
 -- | Given a type of the form
 --
 -- > A -> ... -> C
 --
--- returns the type of C
+-- returns C
 getReturnType :: Type -> Type
 getReturnType t = case splitForAllTys t of
     (_,t') -> go t'
@@ -195,13 +243,16 @@ mathInfo2expr guts herbie = go (hexpr herbie)
             a1' <- go a1
             a2' <- go a2
             return $ Case
---                 (Var $ trueDataConId)
                 cond'
-                (trueDataConId) -- FIXME: what should this be?
+                wildVar
                 t
                 [ (DataAlt falseDataCon, [], a2')
                 , (DataAlt trueDataCon, [], a1')
                 ]
+            where
+                wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
+                wildVar = mkLocalVar VanillaId wildName boolTy vanillaIdInfo
+
 
         -- leaf is a numeric literal
         go (ELit r) = do
@@ -459,7 +510,9 @@ maybeHead _     = Nothing
 myshow :: DynFlags -> Expr Var -> String
 myshow dflags = go 1
     where
-        go i (Var v) = "Var "++showSDoc dflags (ppr v)++"::"++showSDoc dflags (ppr $ varType v)
+        go i (Var v) = "Var "++showSDoc dflags (ppr v)
+                     ++"::"++showSDoc dflags (ppr $ varType v)
+                     ++"; "++showSDoc dflags (ppr $ idOccInfo v)
         go i (Lit (MachFloat  l  )) = "FloatLiteral "  ++show (fromRational l :: Double)
         go i (Lit (MachDouble l  )) = "DoubleLiteral " ++show (fromRational l :: Double)
         go i (Lit (MachInt    l  )) = "IntLiteral "    ++show (fromIntegral l :: Double)
@@ -492,15 +545,6 @@ myshow dflags = go 1
             ++drop 4 white
             where
                 white=replicate (4*i) ' '
-        go i (Case a b c d)
-            = "Case\n"
-            ++white++"("++go (i+1) a++")\n"
-            ++white++"("++show b++"::"++showSDoc dflags (ppr $ varType b)++")\n"
-            ++white++"("++showSDoc dflags (ppr c)++")\n"
-            ++white++"["++concatMap (myAltShow dflags) d++"]\n"
-            ++drop 4 white
-            where
-                white=replicate (4*i) ' '
         go i (App a b)
             = "App\n"
             ++white++"(" ++ go (i+1) a ++ ")\n"
@@ -508,6 +552,25 @@ myshow dflags = go 1
             ++drop 4 white
             where
                 white=replicate (4*i) ' '
+        go i (Case a b c d)
+            = "Case\n"
+            ++white++"("++go (i+1) a++")\n"
+            ++white++"("++getString b++"::"++showSDoc dflags (ppr $ varType b)++")\n"
+            ++white++"("++showSDoc dflags (ppr c)++")\n"
+            ++white++"["++concatMap altShow d++"]\n"
+            ++drop 4 white
+            where
+                white=replicate (4*i) ' '
+
+                altShow :: Alt Var -> String
+                altShow (con,xs,expr) = "("++con'++", "++xs'++", "++go (i+1) expr++")\n"++white
+                    where
+                        con' = case con of
+                            DataAlt x -> showSDoc dflags (ppr x)
+                            LitAlt x  -> showSDoc dflags (ppr x)
+                            DEFAULT   -> "DEFAULT"
+
+                        xs' = showSDoc dflags (ppr xs)
 
 myCoercionShow :: DynFlags -> Coercion -> String
 myCoercionShow dflags c = go c
@@ -529,16 +592,6 @@ myCoercionShow dflags c = go c
         go (InstCo _ _          ) = "InstCo"
         go (SubCo _             ) = "SubCo"
 
-myAltShow :: DynFlags -> Alt Var -> String
--- myAltShow dflags (con,xs,expr) = "("++con'++", "++xs'++", "++myshow dflags expr++")"
-myAltShow dflags (con,xs,expr) = "("++con'++", "++xs'++", BLAH)"
-    where
-        con' = case con of
-            DataAlt x -> showSDoc dflags (ppr x)
-            LitAlt x  -> showSDoc dflags (ppr x)
-            DEFAULT   -> "DEFAULT"
-
-        xs' = showSDoc dflags (ppr xs)
 
 -- instance Show (Coercion) where
 --     show _ = "Coercion"

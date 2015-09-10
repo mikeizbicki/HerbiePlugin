@@ -8,6 +8,7 @@ import DsBinds
 import DsMonad
 import ErrUtils
 import GhcPlugins
+import Id
 import Unique
 import MkId
 import PrelNames
@@ -33,13 +34,13 @@ plugin = defaultPlugin
 
 install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 install opts todo = do
-    dflags <- getDynFlags
-    liftIO $ writeIORef dynFlags_ref dflags
     reinitializeGlobals
     return (CoreDoPluginPass "MathInfo" pass : todo)
 
 pass :: ModGuts -> CoreM ModGuts
 pass guts = do
+    dflags <- getDynFlags
+    liftIO $ writeIORef dynFlags_ref dflags
     bindsOnlyPass (mapM (modBind guts)) guts
 
 -- | This function gets run on each binding on the Haskell source file.
@@ -47,12 +48,12 @@ modBind :: ModGuts -> CoreBind -> CoreM CoreBind
 modBind guts bndr@(Rec _) = return bndr
 modBind guts bndr@(NonRec b e) = do
     dflags <- getDynFlags
-    putMsgS ""
-    putMsgS $ showSDoc dflags (ppr b)
-        ++ "::"
-        ++ showSDoc dflags (ppr $ varType b)
-    putMsgS $ myshow dflags e
-    return bndr
+--     putMsgS ""
+--     putMsgS $ showSDoc dflags (ppr b)
+--         ++ "::"
+--         ++ showSDoc dflags (ppr $ varType b)
+--     putMsgS $ myshow dflags e
+--     return bndr
     e' <- go [] e
     return $ NonRec b e'
     where
@@ -70,16 +71,27 @@ modBind guts bndr@(NonRec b e) = do
                     -- Lambda expression:
                     -- If the variable is a dictionary, add it to the list;
                     -- Always recurse into the subexpression
+                    --
+                    -- FIXME:
+                    -- Currently, we're removing deadness annotations from any dead variables.
+                    -- This is so that we can use all the dictionaries that the type signatures allow.
+                    -- Core lint complains about using dead variables if we don't.
+                    -- This causes us to remove ALL deadness annotations in the entire program.
+                    -- I'm not sure the drawback of this.
+                    -- This could be fixed by having a second pass through the code
+                    -- to remove only the appropriate deadness annotations.
                     Lam a b -> do
-                        b' <- go (extractDicts a++dicts) b
-                        return $ Lam a b'
+                        let a' = undeadenId a
+                        b' <- go (extractDicts a'++dicts) b
+                        return $ Lam a' b'
 
                     -- Non-recursive let binding:
                     -- If the variable is a dictionary, add it to the list;
                     -- Always recurse into the subexpression
-                    Let bndr@(NonRec a _) b -> do
-                        b' <- go (extractDicts a++dicts) b
-                        return $ Let bndr b'
+                    Let bndr@(NonRec a e) b -> do
+                        let a' = undeadenId a
+                        b' <- go (extractDicts a'++dicts) b
+                        return $ Let (NonRec a' e) b'
 
                     -- Function application:
                     -- Math expressions may appear on either side, so recurse on both
@@ -105,8 +117,8 @@ modBind guts bndr@(NonRec b e) = do
 
 --                     putMsgS $ "    expression "++herbie2lisp dflags herbie
 --                     putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
-                    putMsgS $ ""
-                    putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
+--                     putMsgS $ ""
+--                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
                     putMsgS $ ""
                     putMsgS $ "  before (raw ): "++myshow dflags e
 --                     putMsgS $ "  before (raw ): "++show e
@@ -119,7 +131,7 @@ modBind guts bndr@(NonRec b e) = do
                     putMsgS $ "           "++show (errin res)++" bits of error"
                     putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
                     putMsgS $ "           "++show (errout res)++" bits of error"
-                    putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
+--                     putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
                     putMsgS $ ""
                     putMsgS $ "  after  (raw ): "++myshow dflags e'
 --                     putMsgS $ "  after  (raw ): "++show e'
@@ -136,3 +148,9 @@ extractDicts v = if (isClassPred $ varType v)
             then [v]
             else []
         Nothing -> []
+
+-- | If a variable is marked as dead, remove the marking
+undeadenId :: Var -> Var
+undeadenId a = if isDeadBinder a
+    then setIdOccInfo a NoOccInfo
+    else a
