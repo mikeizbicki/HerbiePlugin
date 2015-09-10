@@ -47,89 +47,50 @@ mkParamType dicts t = do
         , getParam      = t'
         }
     where
-        extractQuantifiers :: Type -> ([Var],Type)
-        extractQuantifiers t = case splitForAllTy_maybe t of
-            Nothing -> ([],t)
-            Just (a,b) -> (a:as,b')
-                where
-                    (as,b') = extractQuantifiers b
 
-        -- | given unquantified types of the form:
-        --
-        -- > (Num a, Ord a) => a -> a
-        --
-        -- The first element of the returned tuple contains everything to the left of "=>";
-        -- and the second element contains everything to the right.
-        extractContext :: Type -> ([Type],Type)
-        extractContext t = case splitTyConApp_maybe t of
-            Nothing -> ([],t)
-            Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
-                               || not hasCxt
-                then ([],t)
-                else (head xs:cxt',t')
-                where
-                    (cxt',t') = extractContext $ head $ tail xs
+-- | Given a quantified type of the form:
+--
+-- > forall a. (Num a, Ord a) => a -> a
+--
+-- The first element of the returned tuple is the list of quantified variables,
+-- and the seecond element is the unquantified type.
+extractQuantifiers :: Type -> ([Var],Type)
+extractQuantifiers t = case splitForAllTy_maybe t of
+    Nothing -> ([],t)
+    Just (a,b) -> (a:as,b')
+        where
+            (as,b') = extractQuantifiers b
 
-                    hasCxt = case classifyPredType $ head xs of
-                        IrredPred _ -> False
-                        _           -> True
+-- | Given unquantified types of the form:
+--
+-- > (Num a, Ord a) => a -> a
+--
+-- The first element of the returned tuple contains everything to the left of "=>";
+-- and the second element contains everything to the right.
+extractContext :: Type -> ([Type],Type)
+extractContext t = case splitTyConApp_maybe t of
+    Nothing -> ([],t)
+    Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
+                       || not hasCxt
+        then ([],t)
+        else (head xs:cxt',t')
+        where
+            (cxt',t') = extractContext $ head $ tail xs
 
-        -- | given a function, get the type of the parameters
-        --
-        -- FIXME: should we provide a check to ensure that all parameters match?
-        extractParam :: Type -> Maybe Type
-        extractParam t = case splitTyConApp_maybe t of
-            Nothing -> Nothing
-            Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
-                then Nothing
-                else Just (head xs)
+            hasCxt = case classifyPredType $ head xs of
+                IrredPred _ -> False
+                _           -> True
 
--- | Given a class, try to calculate a core expression that evaluates to the class's dictionary
-getDictExprFor :: Class -> Type -> [Expr Var] -> Maybe (Expr Var)
-getDictExprFor c varTy = go
-    where
-        -- recursively descend into all the available dictionaries
-        -- until we find one for the class
-        go :: [Expr Var] -> Maybe (Expr Var)
-        go []           = Nothing
-        go (expr:exprs) = case classifyPredType (exprType expr) of
+-- | given a function, get the type of the parameters
+--
+-- FIXME: this should be deleted
+extractParam :: Type -> Maybe Type
+extractParam t = case splitTyConApp_maybe t of
+    Nothing -> Nothing
+    Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
+        then Nothing
+        else Just (head xs)
 
-            -- What we've found isn't a dictionary, so we should skip it.
-            IrredPred _ -> go exprs
-            EqPred _ _ _ -> go exprs
-
-            -- We've found a dictionary.
-            -- If it's the right one, we're done;
-            -- otherwise, recurse into each field (selId) of the dictionary.
-            -- Some of these may be more dictionaries.
-            ClassPred c' [ct] -> if c==c'
-                then Just expr
-                else go $ exprs++[ App (App (Var selId) (Type varTy)) expr | selId <- classAllSelIds c']
-
-            -- We've found a tuple of dictionaries.
-            -- For each dictionary we extract it with a case statement, then recurse.
-            TuplePred preds -> go $
-                [ Case expr wildVar (varType $ tupelems!!i)
-                    [ ( DataAlt $ tupleCon ConstraintTuple $ length preds
-                      , tupelems
-                      , Var $ tupelems!!i
-                      )
-                    ]
-                | (i,t) <- zip [0..] preds
-                ]
-                ++exprs
-                where
-                    tupelems =
-                        [ mkLocalVar
-                            VanillaId
-                            (mkSystemName (mkUnique 'z' j) (mkVarOcc $ "a"++show j))
-                            (mkAppTy (fst $ splitAppTys t') varTy)
-                            vanillaIdInfo
-                        | (j,t') <- zip [0..] preds
-                        ]
-
-                    wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
-                    wildVar = mkLocalVar VanillaId wildName (exprType expr) vanillaIdInfo
 
 -- | Given a type of the form
 --
@@ -147,8 +108,10 @@ getReturnType t = case splitForAllTys t of
             _ -> t
 
 
-dictFromParamType :: Class -> ParamType -> CoreM (Maybe (Expr Var))
-dictFromParamType c pt = return $ getDictExprFor c (getParam pt) (map Var $ getDicts pt)
+-- dictFromParamType :: Class -> ParamType -> CoreM (Maybe (Expr Var))
+-- dictFromParamType c pt =
+--     trace ("getDicts="++showSDoc dynFlags (ppr $ getDicts pt)) $
+--     return $ getDictExprFor c (getParam pt) (map Var $ getDicts pt)
 
 getClasses :: ParamType -> [Class]
 getClasses pt = concat $ map go $ getCxt pt
@@ -181,93 +144,6 @@ herbie2lisp dflags herbie = mathExpr2lisp (hexpr herbie)
 findExpr :: MathInfo -> String -> Maybe (Expr Var)
 findExpr herbie str = lookup str (getExprs herbie)
 
-mathInfo2expr :: ModGuts -> MathInfo -> CoreM (Expr CoreBndr)
-mathInfo2expr guts herbie = go (hexpr herbie)
-    where
-        t = getParam $ numType herbie
-
-        getDict opstr = do
-            ret <- getDictConcrete guts opstr (getParam $ numType herbie)
-            case ret of
-                Just x -> return x
-                Nothing -> do
-                    ret' <- getDictPolymorphic guts opstr (numType herbie)
-                    case ret' of
-                        Just x -> return x
-                        Nothing -> error $ "getDict: could not find dictionary for "++opstr
-
-        -- binary operators
-        go (EBinOp opstr a1 a2) = do
-            a1' <- go a1
-            a2' <- go a2
-            op <- getVar guts opstr
-            dict <- getDict opstr
-            return $ App (App (App (App (Var op) (Type t)) dict) a1') a2'
-
-        -- unary operators
-        go (EMonOp opstr a) = do
-            a' <- go a
-            op <- getVar guts opstr
-            dict <- getDict opstr
-            return $ App (App (App (Var op) (Type t)) dict) a'
-
-        -- if statements
-        go (EIf cond a1 a2) = do
-            cond' <- go cond
-            a1' <- go a1
-            a2' <- go a2
-            return $ Case
-                cond'
-                wildVar
-                t
-                [ (DataAlt falseDataCon, [], a2')
-                , (DataAlt trueDataCon, [], a1')
-                ]
-            where
-                wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
-                wildVar = mkLocalVar VanillaId wildName boolTy vanillaIdInfo
-
-        -- leaf is a numeric literal
-        go (ELit r) = do
-            fromRationalVar <- getVar guts "fromRational"
-            fromRationalDict <- getDict "fromRational"
-
-            integerTyCon <- lookupTyCon integerTyConName
-            let integerTy = mkTyConTy integerTyCon
-
-            ratioTyCon <- lookupTyCon ratioTyConName
-            let tmpName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "a")
-                tmpVar = mkTyVar tmpName liftedTypeKind
-                tmpVarT = mkTyVarTy tmpVar
-                ratioConTy = mkForAllTy tmpVar $ mkFunTys [tmpVarT,tmpVarT] $ mkAppTy (mkTyConTy ratioTyCon) tmpVarT
-                ratioConVar = mkGlobalVar VanillaId ratioDataConName ratioConTy vanillaIdInfo
-
-            return $ App
-                (App
-                    (App
-                        (Var fromRationalVar )
-                        (Type $ getParam $ numType herbie)
-                    )
-                    fromRationalDict
-                )
-                (App
-                    (App
-                        (App
-                            (Var ratioConVar )
-                            (Type integerTy)
-                        )
-                        (Lit $ LitInteger (numerator r) integerTy)
-                    )
-                    (Lit $ LitInteger (denominator r) integerTy)
-                )
-
-        -- leaf is any other expression
-        go (ELeaf str) = do
-            dflags <- getDynFlags
-            return $ case findExpr herbie str of
-                Just x -> x
-                Nothing -> error $ "mathInfo2expr: var " ++ str ++ " not in scope"
-                    ++"; in scope vars="++show (nub $ map fst $ getExprs herbie)
 
 ----------------------------------------
 
@@ -345,28 +221,82 @@ mkMathInfo dflags dicts bndType e = case validType of
         -- everything else
         go e exprs = (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
 
+mathInfo2expr :: ModGuts -> MathInfo -> CoreM (Expr CoreBndr)
+mathInfo2expr guts herbie = go (hexpr herbie)
+    where
+        t = getParam $ numType herbie
+
+        -- binary operators
+        go (EBinOp opstr a1 a2) = do
+            a1' <- go a1
+            a2' <- go a2
+            f <- getDecoratedFunction guts opstr t $ getDicts $ numType herbie
+            return $ App (App f a1') a2'
+
+        -- unary operators
+        go (EMonOp opstr a) = do
+            a' <- go a
+            f <- getDecoratedFunction guts opstr t $ getDicts $ numType herbie
+            return $ App f a'
+
+        -- if statements
+        go (EIf cond a1 a2) = do
+            cond' <- go cond
+            let wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
+--                 wildVar = mkLocalVar VanillaId wildName boolTy vanillaIdInfo
+                wildVar = mkLocalVar VanillaId wildName (exprType cond') vanillaIdInfo
+            a1' <- go a1
+            a2' <- go a2
+            return $ Case
+                cond'
+                wildVar
+                t
+                [ (DataAlt falseDataCon, [], a2')
+                , (DataAlt trueDataCon, [], a1')
+                ]
+
+        -- leaf is a numeric literal
+        go (ELit r) = do
+            fromRationalExpr <- getDecoratedFunction guts "fromRational" t $ getDicts $ numType herbie
+
+            integerTyCon <- lookupTyCon integerTyConName
+            let integerTy = mkTyConTy integerTyCon
+
+            ratioTyCon <- lookupTyCon ratioTyConName
+            let tmpName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "a")
+                tmpVar = mkTyVar tmpName liftedTypeKind
+                tmpVarT = mkTyVarTy tmpVar
+                ratioConTy = mkForAllTy tmpVar $ mkFunTys [tmpVarT,tmpVarT] $ mkAppTy (mkTyConTy ratioTyCon) tmpVarT
+                ratioConVar = mkGlobalVar VanillaId ratioDataConName ratioConTy vanillaIdInfo
+
+            return $ App
+                fromRationalExpr
+                (App
+                    (App
+                        (App
+                            (Var ratioConVar )
+                            (Type integerTy)
+                        )
+                        (Lit $ LitInteger (numerator r) integerTy)
+                    )
+                    (Lit $ LitInteger (denominator r) integerTy)
+                )
+
+        -- leaf is any other expression
+        go (ELeaf str) = do
+            dflags <- getDynFlags
+            return $ case findExpr herbie str of
+                Just x -> x
+                Nothing -> error $ "mathInfo2expr: var " ++ str ++ " not in scope"
+                    ++"; in scope vars="++show (nub $ map fst $ getExprs herbie)
+
 ----------------------------------------
 -- get information from the environment
-
--- | Converts a String that contains a name of a variable into the compiler's internal representation of that variable.
-getNameParent :: ModGuts -> String -> (Name,Parent)
-getNameParent guts str = case filter isCorrectVar (concat $ occEnvElts (mg_rdr_env guts)) of
-    xs -> trace ("getNameParent: xs="++show (map gre_par xs)) $ if length xs>0
-        then (gre_name $ head $ xs, gre_par $ head $ xs)
-        else error $ "getNameParent: '"++str++"'"
-    where
-
-        isCorrectVar x = (getString $ gre_name x) == str
-                      && (case gre_par x of NoParent -> False; _ -> True)
-
-instance Show Parent where
-    show NoParent = "NoParent"
-    show (ParentIs x) = "ParentIs "++show x
 
 -- | Converts a string into a Core variable
 getVar :: ModGuts -> String -> CoreM Var
 getVar guts opstr = do
-    let opname = fst $ getNameParent guts opstr
+    let opname = getName guts opstr
     hscenv <- getHscEnv
     dflags <- getDynFlags
     eps <- liftIO $ hscEPS hscenv
@@ -374,31 +304,135 @@ getVar guts opstr = do
             Just (AnId i) -> varType i
     return $ mkGlobalVar VanillaId opname optype vanillaIdInfo
 
--- | Given a function name and concrete type, get the needed dictionary.
-getDictConcrete :: ModGuts -> String -> Type -> CoreM (Maybe (Expr CoreBndr))
-getDictConcrete guts opstr t = do
-    hscenv <- getHscEnv
-    dflags <- getDynFlags
-    eps <- liftIO $ hscEPS hscenv
-    let (opname,ParentIs classname) = getNameParent guts opstr
-        classType = mkTyConTy $ case lookupNameEnv (eps_PTE eps) classname of
-            Just (ATyCon t) -> t
-            Just (AnId     _) -> error $ "loopupNameEnv AnId"
-            Just (AConLike _) -> error $ "loopupNameEnv AConLike"
-            Just (ACoAxiom _) -> error $ "loopupNameEnv ACoAxiom"
-            Nothing           -> error $ "getNameParent gutsEnv Nothing; classname="
+    where
+        getName :: ModGuts -> String -> Name
+        getName guts str = case filter isCorrectVar (concat $ occEnvElts (mg_rdr_env guts)) of
+            xs -> if length xs>0
+                then gre_name $ head $ xs
+                else error $ "getNameParent: '"++str++"'"
+            where
+                isCorrectVar x = (getString $ gre_name x) == str
+                              && (case gre_par x of NoParent -> False; _ -> True)
 
-        dictType = mkAppTy classType t
-        dictVar = mkGlobalVar
+-- | Like "decorateFunction", but first finds the function variable given a string.
+getDecoratedFunction :: ModGuts -> String -> Type -> [Var] -> CoreM CoreExpr
+getDecoratedFunction guts str t preds = do
+    f <- getVar guts str
+    decorateFunction guts f t preds
+
+-- | Given a variable that contains a function,
+-- the type the function is being applied to,
+-- and all in scope predicates,
+-- apply the type and any needed dictionaries to the function.
+decorateFunction :: ModGuts -> Var -> Type -> [Var] -> CoreM CoreExpr
+decorateFunction guts f t preds = do
+    dict <- getDict f
+    return $ App (App (Var f) (Type t)) dict
+    where
+        getDict :: Var -> CoreM CoreExpr
+        getDict op = do
+            let ([v],unquantified) = extractQuantifiers $ varType op
+                ([pred],_) = extractContext unquantified
+                pred' = substTyWith [v] [t] $ pred
+
+            ret <- getDictionary guts pred'
+            case ret of
+                Just x -> return x
+                Nothing -> case getPredEvidence pred' (map Var preds) of
+                    Just x -> return x
+                    Nothing -> error $ "getDict: could not find dictionary for "++getString op
+
+-- | Given a predicate for which we don't have evidence
+-- and a list of expressions that contain evidence for predicates,
+-- construct an expression that contains evidence for the given predicate.
+getPredEvidence :: PredType -> [CoreExpr] -> Maybe CoreExpr
+getPredEvidence pred xs =
+--     trace ("getDictExprFor: c="++getString c
+--          ++"; varTy="++showSDoc dynFlags (ppr varTy)
+--          ++"; xs="++showSDoc dynFlags (ppr xs)
+--           ) $
+    go xs
+    where
+        -- We expect pred to have exactly one type variable within it,
+        -- which we extract here.
+        varTy :: Type
+        varTy = case getTyVar_maybe pred of
+            Just x -> mkTyVarTy x
+            Nothing -> error $ "getPredEvidence: unsupported predicate "++showSDoc dynFlags (ppr pred)
+--         varTy = case classifyPredType pred of
+--             ClassPred _ [varTy] -> varTy
+
+        -- Recursively descend into all the available predicates.
+        -- The list of expressions will grown as we recurse.
+        go :: [CoreExpr] -> Maybe (CoreExpr)
+        go []           = Nothing
+        go (expr:exprs) = if exprType expr == pred
+
+            -- The expression we've found matches the predicate.
+            -- We're done!
+            then Just expr
+
+            -- The expression doesn't match the predicate,
+            -- so we recurse by searching for sub-predicates within expr
+            -- and adding them to the list.
+            else case classifyPredType (exprType expr) of
+
+                -- What we've found contains no more predicates to recurse into,
+                -- so we don't add anything to the list of exprs to search.
+                IrredPred _ -> go exprs
+                EqPred _ _ _ -> go exprs
+
+                -- We've found a class dictionary.
+                -- Recurse into each field (selId) of the dictionary.
+                -- Some (but not all) of these may be more dictionaries.
+                ClassPred c' [ct] -> go $ exprs++
+                    [ App (App (Var selId) (Type varTy)) expr | selId <- classAllSelIds c' ]
+
+                -- We've found a tuple of evidence.
+                -- For each field of the tuple we extract it with a case statement, then recurse.
+                TuplePred preds -> go $
+                    [ Case expr wildVar (varType $ tupelems!!i)
+                        [ ( DataAlt $ tupleCon ConstraintTuple $ length preds
+                          , tupelems
+                          , Var $ tupelems!!i
+                          )
+                        ]
+                    | (i,t) <- zip [0..] preds
+                    ]
+                    ++exprs
+                    where
+                        tupelems =
+                            [ mkLocalVar
+                                VanillaId
+                                (mkSystemName (mkUnique 'z' j) (mkVarOcc $ "a"++show j))
+                                (mkAppTy (fst $ splitAppTys t') varTy)
+                                vanillaIdInfo
+                            | (j,t') <- zip [0..] preds
+                            ]
+
+                        -- FIXME:
+                        -- If multiple tuples get created in the recursion,
+                        -- then there will be multiple variables with the same name and unique.
+                        -- These variables never actually get referenced,
+                        -- so I don't think this is a problem.
+                        -- But it is a code smell.
+                        wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
+                        wildVar = mkLocalVar VanillaId wildName (exprType expr) vanillaIdInfo
+
+-- | Given a non-polymorphic PredType (e.g. `Num Float`),
+-- return the corresponding dictionary.
+getDictionary :: ModGuts -> Type -> CoreM (Maybe CoreExpr)
+getDictionary guts dictTy = do
+    let dictVar = mkGlobalVar
             VanillaId
             (mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "magicDictionaryName"))
-            dictType
+            dictTy
             vanillaIdInfo
 
     bnds <- runTcM guts $ do
         loc <- getCtLoc $ GivenOrigin UnkSkol
         let nonC = mkNonCanonical $ CtWanted
-                { ctev_pred = dictType
+                { ctev_pred = varType dictVar
                 , ctev_evar = dictVar
                 , ctev_loc = loc
                 }
@@ -420,21 +454,6 @@ getDictConcrete guts opstr t = do
     case bnds of
         [NonRec _ dict] -> return $ Just dict
         otherwise -> return Nothing
-
-getDictPolymorphic :: ModGuts -> String -> ParamType -> CoreM (Maybe (Expr (CoreBndr)))
-getDictPolymorphic guts opstr pt = do
-    let (f,ParentIs p) =  getNameParent guts opstr
-        c = case filter
-            (\x -> getOccName x == nameOccName p)
-            (concatMap getSuperClasses $ getClasses pt)
-            of
-          (x:_) -> x
-          [] -> error $ "getDictPolymorphic: could not find parent"
-            ++"\n  ; opstr="++opstr
-            ++"\n  ; f="++occNameString (nameOccName f)
-            ++"\n  ; p="++occNameString (nameOccName p)
-            ++"\n  ; superclasses="++show (map getString $ concatMap getSuperClasses $ getClasses pt)
-    dictFromParamType c pt
 
 --------------------------------------------------------------------------------
 --
@@ -559,16 +578,16 @@ myCoercionShow dflags c = go c
                                                  ++showSDoc dflags (ppr c)
         go (AppCo _ _           ) = "AppCo"
         go (ForAllCo _ _        ) = "ForAllCo"
-        go (CoVarCo _           ) = "CoVarCo"
+        go (CoVarCo v           ) = "CoVarCo ("++myshow dflags (Var v)++")"
         go (AxiomInstCo _ _ _   ) = "AxiomInstCo"
         go (UnivCo _ _ _ _      ) = "UnivCo"
-        go (SymCo _             ) = "SymCo"
+        go (SymCo c'            ) = "SymCo ("++myCoercionShow dflags c'++")"
         go (TransCo _ _         ) = "TransCo"
         go (AxiomRuleCo _ _ _   ) = "AxiomRuleCo"
         go (NthCo _ _           ) = "NthCo"
         go (LRCo _ _            ) = "LRCo"
         go (InstCo _ _          ) = "InstCo"
-        go (SubCo _             ) = "SubCo"
+        go (SubCo c'            ) = "SubCo ("++myCoercionShow dflags c'++")"
 
 
 -- instance Show (Coercion) where

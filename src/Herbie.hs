@@ -48,12 +48,12 @@ modBind :: ModGuts -> CoreBind -> CoreM CoreBind
 modBind guts bndr@(Rec _) = return bndr
 modBind guts bndr@(NonRec b e) = do
     dflags <- getDynFlags
---     putMsgS ""
---     putMsgS $ showSDoc dflags (ppr b)
---         ++ "::"
---         ++ showSDoc dflags (ppr $ varType b)
---     putMsgS $ myshow dflags e
---     return bndr
+    putMsgS ""
+    putMsgS $ showSDoc dflags (ppr b)
+        ++ "::"
+        ++ showSDoc dflags (ppr $ varType b)
+    putMsgS $ myshow dflags e
+    return bndr
     e' <- go [] e
     return $ NonRec b e'
     where
@@ -141,13 +141,11 @@ modBind guts bndr@(NonRec b e) = do
 -- | Return a list with the given variable if the variable is a dictionary or tuple of dictionaries,
 -- otherwise return [].
 extractDicts :: Var -> [Var]
-extractDicts v = if (isClassPred $ varType v)
-    then [v]
-    else case splitTyConApp_maybe $ varType v of
-        Just (_,xs) -> if or (map isClassPred xs)
-            then [v]
-            else []
-        Nothing -> []
+extractDicts v = case classifyPredType (varType v) of
+    ClassPred _ _ -> [v]
+    EqPred _ _ _  -> [v]
+    TuplePred _   -> [v]
+    IrredPred _   -> []
 
 -- | If a variable is marked as dead, remove the marking
 undeadenId :: Var -> Var

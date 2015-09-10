@@ -64,16 +64,16 @@ stabilizeLisp cmdin = do
             insertDatabase res
             return res
     return ret
---     if not $ "(if " `isInfixOf` cmdout ret
---         then return ret
---         else do
---             putStrLn "WARNING: Herbie's output contains if statements, which aren't yet supported"
---             putStrLn "WARNING: Using original numerically unstable equation."
---             return $ ret
---                 { errout = errin ret
---                 , cmdout = cmdin
---                 }
-    return $ ret { cmdout = "(+ herbie0 herbie1)" }
+    if not $ "(if " `isInfixOf` cmdout ret
+        then return ret
+        else do
+            putStrLn "WARNING: Herbie's output contains if statements, which aren't yet supported"
+            putStrLn "WARNING: Using original numerically unstable equation."
+            return $ ret
+                { errout = errin ret
+                , cmdout = cmdin
+                }
+--     return $ ret { cmdout = "(+ herbie0 herbie1)" }
 --     return $ ret { cmdout = "(if (> herbie0 herbie1) herbie0 herbie1)" }
 
 -- | Run the `herbie` command and return the result
