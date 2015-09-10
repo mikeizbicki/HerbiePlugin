@@ -86,76 +86,50 @@ mkParamType dicts t = do
 
 -- | Given a class, try to calculate a core expression that evaluates to the class's dictionary
 getDictExprFor :: Class -> Type -> [Expr Var] -> Maybe (Expr Var)
-getDictExprFor c t = go
+getDictExprFor c varTy = go
     where
         -- recursively descend into all the available dictionaries
         -- until we find one for the class
         go :: [Expr Var] -> Maybe (Expr Var)
-        go []     = Nothing
-        go (x:xs) = case x of
-            Var v                   -> processPred $ varType v
-            (App (App (Var v) _) _) -> processPred $ getReturnType $ varType v
+        go []           = Nothing
+        go (expr:exprs) = case classifyPredType (exprType expr) of
 
-            a -> error $ "getDictExprFor: "++show a
+            -- What we've found isn't a dictionary, so we should skip it.
+            IrredPred _ -> go exprs
+            EqPred _ _ _ -> go exprs
 
-            where
-                processPred :: PredType -> Maybe (Expr Var)
-                processPred t = case classifyPredType t of
+            -- We've found a dictionary.
+            -- If it's the right one, we're done;
+            -- otherwise, recurse into each field (selId) of the dictionary.
+            -- Some of these may be more dictionaries.
+            ClassPred c' [ct] -> if c==c'
+                then Just expr
+                else go $ exprs++[ App (App (Var selId) (Type varTy)) expr | selId <- classAllSelIds c']
 
-                    -- What we've found isn't a dictionary, so we should skip it.
-                    IrredPred _ -> go xs
-                    EqPred _ _ _ -> go xs
+            -- We've found a tuple of dictionaries.
+            -- For each dictionary we extract it with a case statement, then recurse.
+            TuplePred preds -> go $
+                [ Case expr wildVar (varType $ tupelems!!i)
+                    [ ( DataAlt $ tupleCon ConstraintTuple $ length preds
+                      , tupelems
+                      , Var $ tupelems!!i
+                      )
+                    ]
+                | (i,t) <- zip [0..] preds
+                ]
+                ++exprs
+                where
+                    tupelems =
+                        [ mkLocalVar
+                            VanillaId
+                            (mkSystemName (mkUnique 'z' j) (mkVarOcc $ "a"++show j))
+                            (mkAppTy (fst $ splitAppTys t') varTy)
+                            vanillaIdInfo
+                        | (j,t') <- zip [0..] preds
+                        ]
 
-                    -- We've found a dictionary.
-                    -- If it's the right one, we're done;
-                    -- otherwise: get the dictionary of each superclass by applying the selId,
-                    -- then recurse onto these dictionaries
-                    --
-                    -- FIXME:
-                    -- This causes core Lint to fail.
-                    -- The variables within selId's type are out of scope.
-                    -- I don't understand why.
-                    ClassPred c' [ct] -> if c==c'
-                        then Just x
-                        else go $ xs++map mkSuperClassDict (classAllSelIds c')
-                            where
-                                mkSuperClassDict selId = App (App (Var selId) (Type t)) x
-
-                    -- We've found a tuple of dictionaries.
-                    -- For each dictionary we extract it with a Case statement, then recurse
-                    TuplePred xs -> listToMaybe $ mapMaybe tupgo $ zip [0..] xs
-                        where
-                            tupsize = length xs
-
-                            tupgo :: (Int,PredType) -> Maybe (Expr Var)
-                            tupgo (i,t) = case processPred t of
-                                Nothing -> Nothing
-                                Just x -> trace ("tupgo: t="++showSDoc dynFlags (ppr t)
-                                               ++"; xs="++showSDoc dynFlags (ppr xs)) $
-                                    Just $ Case x wildVar t
-                                        [ (DataAlt $ tupleCon ConstraintTuple tupsize
-                                          , tupelems
-                                          , Var $ tupelems !! i
-                                          )
-                                        ]
-                                where
-                                    tupelems =
-                                        [ mkGlobalVar
-                                            VanillaId
-                                            (mkSystemName (mkUnique 'y' j) (mkVarOcc $ "a"++show j))
-                                            t'
-                                             vanillaIdInfo
-
-                                        | (j,t') <- zip [0..] xs
-                                        ]
-
-                                    wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
-                                    wildVar = mkGlobalVar VanillaId wildName t' vanillaIdInfo
-
-                                    t' = case x of
-                                        (Var v) -> varType v
-                                        (App (App (Var v) _) _) -> varType v
-
+                    wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
+                    wildVar = mkLocalVar VanillaId wildName (exprType expr) vanillaIdInfo
 
 -- | Given a type of the form
 --
@@ -252,7 +226,6 @@ mathInfo2expr guts herbie = go (hexpr herbie)
             where
                 wildName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "wild")
                 wildVar = mkLocalVar VanillaId wildName boolTy vanillaIdInfo
-
 
         -- leaf is a numeric literal
         go (ELit r) = do
@@ -378,12 +351,17 @@ mkMathInfo dflags dicts bndType e = case validType of
 -- | Converts a String that contains a name of a variable into the compiler's internal representation of that variable.
 getNameParent :: ModGuts -> String -> (Name,Parent)
 getNameParent guts str = case filter isCorrectVar (concat $ occEnvElts (mg_rdr_env guts)) of
-    xs -> if length xs>0
+    xs -> trace ("getNameParent: xs="++show (map gre_par xs)) $ if length xs>0
         then (gre_name $ head $ xs, gre_par $ head $ xs)
-        else error $ "getNameParent: '"++str++"'\n"
+        else error $ "getNameParent: '"++str++"'"
     where
+
         isCorrectVar x = (getString $ gre_name x) == str
                       && (case gre_par x of NoParent -> False; _ -> True)
+
+instance Show Parent where
+    show NoParent = "NoParent"
+    show (ParentIs x) = "ParentIs "++show x
 
 -- | Converts a string into a Core variable
 getVar :: ModGuts -> String -> CoreM Var
@@ -405,10 +383,10 @@ getDictConcrete guts opstr t = do
     let (opname,ParentIs classname) = getNameParent guts opstr
         classType = mkTyConTy $ case lookupNameEnv (eps_PTE eps) classname of
             Just (ATyCon t) -> t
-            Just (AnId     _) -> error "loopupNameEnv AnId"
-            Just (AConLike _) -> error "loopupNameEnv AConLike"
-            Just (ACoAxiom _) -> error "loopupNameEnv ACoAxiom"
-            Nothing           -> error "getNameParent gutsEnv Nothing"
+            Just (AnId     _) -> error $ "loopupNameEnv AnId"
+            Just (AConLike _) -> error $ "loopupNameEnv AConLike"
+            Just (ACoAxiom _) -> error $ "loopupNameEnv ACoAxiom"
+            Nothing           -> error $ "getNameParent gutsEnv Nothing; classname="
 
         dictType = mkAppTy classType t
         dictVar = mkGlobalVar
