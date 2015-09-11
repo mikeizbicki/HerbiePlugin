@@ -33,6 +33,9 @@ import Prelude
 
 --------------------------------------------------------------------------------
 
+dbg :: Outputable a => a -> String
+dbg a = showSDoc dynFlags (ppr a)
+
 {-# NOINLINE dynFlags_ref #-}
 dynFlags_ref :: IORef DynFlags
 dynFlags_ref = unsafePerformIO (newIORef undefined)

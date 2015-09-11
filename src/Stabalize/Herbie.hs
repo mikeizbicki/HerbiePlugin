@@ -74,7 +74,7 @@ stabilizeLisp cmdin = do
                 , cmdout = cmdin
                 }
 --     return $ ret { cmdout = "(+ herbie0 herbie1)" }
---     return $ ret { cmdout = "(if (> herbie0 herbie1) herbie0 herbie1)" }
+    return $ ret { cmdout = "(if (> herbie0 herbie1) herbie0 herbie1)" }
 
 -- | Run the `herbie` command and return the result
 execHerbie :: String -> IO (StabilizerResult String)
