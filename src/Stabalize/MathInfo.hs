@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances,FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances,FlexibleContexts,MultiWayIf #-}
 module Stabalize.MathInfo
     where
 
@@ -242,7 +242,10 @@ mathInfo2expr guts herbie = go (hexpr herbie)
 
         -- if statements
         go (EIf cond a1 a2) = do
-            cond' <- go cond >>= castToType (getDicts pt) boolTy
+            mcond' <- go cond >>= castToType (map Var $ getDicts pt) boolTy
+            let cond' = case mcond' of
+                    Just x -> x
+                    Nothing -> error $ "EIf:"
             a1' <- go a1
             a2' <- go a2
 
@@ -258,76 +261,6 @@ mathInfo2expr guts herbie = go (hexpr herbie)
                 , (DataAlt trueDataCon, [], a1')
                 ]
 
-                where
-                    castToType :: [Var] -> Type -> CoreExpr -> CoreM CoreExpr
-                    castToType preds castTy expr = if exprType expr == castTy
-                        then return expr
-                        else do
-                            coboxUniq <- getUniqueM
-                            let coboxName = mkSystemName coboxUniq (mkVarOcc $ "cobox")
-                                coboxType = mkCoercionType Nominal (exprType expr) castTy
-                                coboxVar = mkLocalVar VanillaId coboxName coboxType vanillaIdInfo
-
-                            let eqpred = head $ filter go preds
-                                    where
-                                        go pred = case classifyPredType $ varType pred of
-                                            EqPred _ _ _ -> True
-                                            _ -> False
-                                coercion = mkSubCo $ mkCoVarCo coboxVar
-
-                            wildUniq <- getUniqueM
-                            let wildName = mkSystemName wildUniq (mkVarOcc $ "wild")
-                                wildType = varType eqpred
-                                wildVar = mkLocalVar VanillaId wildName wildType vanillaIdInfo
-
-                            return $ Case
-                                (Var eqpred)
-                                wildVar
-                                castTy
-                                [ (DataAlt eqBoxDataCon, [coboxVar], Cast expr coercion) ]
-
--- Lam a_a608::*; coercion=False
--- (Lam $dBoolean_a60j::Boolean (Logic a); coercion=False
--- (Lam $dLattice__a60k::Lattice_ a; coercion=False
--- (Lam $dSemigroup_a60l::Semigroup a; coercion=False
--- (Lam cobox_a60m::Logic a ~ Bool; coercion=False
--- (Let cobox_a60t::Bool ~ Logic a
--- (Let $dComplemented_a60s::Complemented (Logic a)
--- (Let $dPOrd__a60r::POrd_ a
--- (Lam x_a2H2::a; coercion=False
--- (Lam y_a2H3::a; coercion=False
--- (Case
---     (Case
---         (Var cobox_a60t_a60t::Bool ~ Logic a)
---         (cobox_X60F::Bool ~ Logic a)
---         (Bool)
---         [(Eq#, ["Var cobox_d62x::Bool ~# Logic a"], Cast
---             (App
---                 (App
---                     (App
---                         (App
---                             (App
---                                 (Var <_r3b::forall b. (POrd_ b, Complemented (Logic b)) => b -> b -> Logic b)
---                                 (Type a)
---                             )
---                             (Var $dPOrd__a60r_a60r::POrd_ a)
---                         )
---                         (Var $dComplemented_a60s_a60s::Complemented (Logic a))
---                     )
---                     (Var x_a2H2::a)
---                 )
---                 (Var y_a2H3::a)
---             )
---             (Coercion SubCo (SymCo (CoVarCo (Var cobox_d62x::Bool ~# Logic a))))
---         )
---         ]
---     )
---     (wild_00::Bool)
---     (a)
---     [(False, [], Var y_a2H3::a)
---     (True, [], Var x_a2H2::a)
---     ]
-
         -- leaf is a numeric literal
         go (ELit r) = do
             fromRationalExpr <- getDecoratedFunction guts "fromRational" (getParam pt) (getDicts pt)
@@ -336,7 +269,8 @@ mathInfo2expr guts herbie = go (hexpr herbie)
             let integerTy = mkTyConTy integerTyCon
 
             ratioTyCon <- lookupTyCon ratioTyConName
-            let tmpName = mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "a")
+            tmpUniq <- getUniqueM
+            let tmpName = mkSystemName tmpUniq (mkVarOcc $ "a")
                 tmpVar = mkTyVar tmpName liftedTypeKind
                 tmpVarT = mkTyVarTy tmpVar
                 ratioConTy = mkForAllTy tmpVar $ mkFunTys [tmpVarT,tmpVarT] $ mkAppTy (mkTyConTy ratioTyCon) tmpVarT
@@ -364,7 +298,7 @@ mathInfo2expr guts herbie = go (hexpr herbie)
                     ++"; in scope vars="++show (nub $ map fst $ getExprs herbie)
 
 ----------------------------------------
--- get information from the environment
+-- core manipulation
 
 -- | Converts a string into a Core variable
 getVar :: ModGuts -> String -> CoreM Var
@@ -413,25 +347,53 @@ decorateFunction guts f t preds = do
             case ret of
                 Just x -> return [x]
                 Nothing -> do
-                    ret <- getPredEvidence pred (map Var preds)
+                    ret <- getPredEvidence guts pred (map Var preds)
                     case ret of
                         Just x -> return [x]
                         Nothing -> error $ "getDict: f="++getString f++"; pred="++showSDoc dynFlags (ppr pred)
 
+-- | Given a non-polymorphic PredType (e.g. `Num Float`),
+-- return the corresponding dictionary.
+getDictionary :: ModGuts -> Type -> CoreM (Maybe CoreExpr)
+getDictionary guts dictTy = do
+    let dictVar = mkGlobalVar
+            VanillaId
+            (mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "magicDictionaryName"))
+            dictTy
+            vanillaIdInfo
+
+    bnds <- runTcM guts $ do
+        loc <- getCtLoc $ GivenOrigin UnkSkol
+        let nonC = mkNonCanonical $ CtWanted
+                { ctev_pred = varType dictVar
+                , ctev_evar = dictVar
+                , ctev_loc = loc
+                }
+            wCs = mkSimpleWC [nonC]
+        (x, evBinds) <- solveWantedsTcM wCs
+        bnds <- initDsTc $ dsEvBinds evBinds
+
+--         liftIO $ do
+--             putStrLn $ "dictType="++showSDoc dflags (ppr dictType)
+--             putStrLn $ "dictVar="++showSDoc dflags (ppr dictVar)
+--
+--             putStrLn $ "nonC="++showSDoc dflags (ppr nonC)
+--             putStrLn $ "wCs="++showSDoc dflags (ppr wCs)
+--             putStrLn $ "bnds="++showSDoc dflags (ppr bnds)
+--             putStrLn $ "x="++showSDoc dflags (ppr x)
+
+        return bnds
+
+    case bnds of
+        [NonRec _ dict] -> return $ Just dict
+        otherwise -> return Nothing
+
 -- | Given a predicate for which we don't have evidence
 -- and a list of expressions that contain evidence for predicates,
 -- construct an expression that contains evidence for the given predicate.
-getPredEvidence :: PredType -> [CoreExpr] -> CoreM (Maybe CoreExpr)
-getPredEvidence pred xs = go [ (x, extractBaseTy $ exprType x) | x <- xs ]
+getPredEvidence :: ModGuts -> PredType -> [CoreExpr] -> CoreM (Maybe CoreExpr)
+getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) | x <- evidenceExprs ]
     where
-        -- Extracts the type that each of our pieces of evidence is applied to
-        extractBaseTy :: Type -> Type
-        extractBaseTy t = case classifyPredType t of
-            ClassPred _ [x] -> x
-            EqPred rel t1 t2 -> error $ "EqPred: rel="++dbg rel
-                                        ++"; t1="++dbg t1
-                                        ++"; t2="++dbg t2
-
 
         -- Recursively descend into all the available predicates.
         -- The list tracks both the evidence expression (this will change in recursive descent),
@@ -451,12 +413,27 @@ getPredEvidence pred xs = go [ (x, extractBaseTy $ exprType x) | x <- xs ]
 
                 -- What we've found contains no more predicates to recurse into,
                 -- so we don't add anything to the list of exprs to search.
-                IrredPred _ ->
---                     trace ("getPredEvidence.go.IP: pred="++dbg pred++"; exprType="++dbg (exprType expr)) $
-                    go exprs
-                EqPred _ _ _ ->
---                     trace ("getPredEvidence.go.EP: pred="++dbg pred++"; exprType="++dbg (exprType expr)) $
-                    go exprs
+                IrredPred _ -> go exprs
+
+                EqPred _ t1 t2 -> trace ("getPredEvidence.go.EP: pred="++dbg pred
+                    ++"; origType="++dbg (baseTy)
+                    ++"; exprType="++dbg (exprType expr)
+                    ) $ case splitAppTy_maybe pred of
+                        Nothing -> go exprs
+                        Just (tyCon,tyApp) -> if baseTy/=tyApp
+                            then go exprs
+                            else do
+                                let pred' = mkAppTy tyCon $ if t1==baseTy
+                                        then t2
+                                        else t1
+                                ret <- getDictionary guts pred'
+                                case ret of
+                                    Nothing -> go exprs
+                                    Just x -> do
+                                        ret <- castToType evidenceExprs pred x
+                                        case ret of
+                                            Just x -> return $ Just x
+                                            Nothing -> error ("  Just: tyApp="++dbg tyApp++"; x="++dbg x++"; pred="++dbg pred)
 
                 -- We've found a class dictionary.
                 -- Recurse into each field (selId) of the dictionary.
@@ -472,23 +449,6 @@ getPredEvidence pred xs = go [ (x, extractBaseTy $ exprType x) | x <- xs ]
                       )
                     | selId <- classAllSelIds c'
                     ]
---                     where
---                         -- The predicate we're inspecting might be acting on
---                         -- something more complicated than just a type variable.
---                         -- For example, the predicate might be `Boolean (Logic a)`
---                         -- instead of just `Boolean a`.
---                         -- This function ensures that any type constructors in the predicate
---                         -- get propagated correctly into the selId's.
---                         applyTypeConstructors :: Type -> Type
---                         applyTypeConstructors t = mkForAllTy v $ substTyWith [v] [unk'] unquantified
---                             where
---                                 unk' = substTyWith
---                                     [predArgTyVar]
---                                     [mkTyVarTy v]
---                                     unk
---
---                                 (tyCon,unk) = splitAppTy pred
---                                 ([v],unquantified) = extractQuantifiers t
 
                 -- We've found a tuple of evidence.
                 -- For each field of the tuple we extract it with a case statement, then recurse.
@@ -526,6 +486,151 @@ getPredEvidence pred xs = go [ (x, extractBaseTy $ exprType x) | x <- xs ]
 
                     go $ ret++exprs
 
+-- | Given some evidence, an expression, and a type:
+-- try to prove that the expression can be cast to the type.
+-- If it can, return the cast expression.
+castToType :: [CoreExpr] -> Type -> CoreExpr -> CoreM (Maybe CoreExpr)
+castToType xs castTy inputExpr = if exprType inputExpr == castTy
+    then return $ Just inputExpr
+    else go [ (x, extractBaseTy $ exprType x) | x <- xs ]
+    where
+
+
+        go :: [(CoreExpr,Type)] -> CoreM (Maybe (CoreExpr))
+        go []                    = return Nothing
+        go ((expr,baseTy):exprs) = case classifyPredType $ exprType expr of
+
+            IrredPred _ -> go exprs
+
+            EqPred _ t1 t2 -> trace ("castToType.go.EP: castTy="++dbg castTy
+              ++"; origType="++dbg (baseTy)
+              ++"; exprType="++dbg (exprType expr)
+              ) $ goEqPred [] castTy (exprType inputExpr)
+                where
+                    -- Check if a cast is possible.
+                    -- We need to recursively peel off all the type constructors
+                    -- on the inputTyRHS and castTyRHS types.
+                    -- As long as the type constructors match,
+                    -- we might be able to do a cast at any level of the peeling
+                    goEqPred :: [TyCon] -> Type -> Type -> CoreM (Maybe CoreExpr)
+                    goEqPred tyCons castTyRHS inputTyRHS =
+--                       trace
+--                       (" goEqPred: tyCons="++dbg tyCons
+--                       ++"; castTyRHS="++dbg castTyRHS
+--                       ++"; inputTyRHS="++dbg inputTyRHS
+--                       ) $
+                      if
+                        | t1==castTyRHS && t2==inputTyRHS -> mkCast True
+                        | t2==castTyRHS && t1==inputTyRHS -> mkCast False
+                        | otherwise -> case ( splitTyConApp_maybe castTyRHS
+                                            , splitTyConApp_maybe inputTyRHS
+                                            ) of
+                            (Just (castTyCon, [castTyRHS']), Just (inputTyCon,[inputTyRHS'])) ->
+                                if castTyCon == inputTyCon
+                                    then goEqPred (castTyCon:tyCons) castTyRHS' inputTyRHS'
+                                    else go exprs
+                            _ -> go exprs
+                        where
+
+                            -- Constructs the actual cast from one variable type to another.
+                            --
+                            -- There's some subtle voodoo in here involving GHC's Roles.
+                            -- Basically, everything gets created as a Nominal role,
+                            -- but the final Coercion needs to be Representational.
+                            -- mkSubCo converts from Nominal into Representational.
+                            -- See https://ghc.haskell.org/trac/ghc/wiki/RolesImplementation
+                            mkCast :: Bool -> CoreM (Maybe CoreExpr)
+                            mkCast isFlipped = do
+                                coboxUniq <- getUniqueM
+                                let coboxName = mkSystemName coboxUniq (mkVarOcc $ "cobox")
+                                    coboxType = if isFlipped
+                                        then mkCoercionType Nominal castTyRHS inputTyRHS
+                                        else mkCoercionType Nominal inputTyRHS castTyRHS
+                                    coboxVar = mkLocalVar VanillaId coboxName coboxType vanillaIdInfo
+
+                                -- Reapplies the list of tyCons that we peeled off during the recursion.
+                                let mkCoercion [] = if isFlipped
+                                        then mkSymCo $ mkCoVarCo coboxVar
+                                        else mkCoVarCo coboxVar
+                                    mkCoercion (x:xs) = mkTyConAppCo Nominal x [mkCoercion xs]
+
+                                wildUniq <- getUniqueM
+                                let wildName = mkSystemName wildUniq (mkVarOcc $ "wild")
+                                    wildType = exprType expr
+                                    wildVar = mkLocalVar VanillaId wildName wildType vanillaIdInfo
+
+                                return $ Just $ Case
+                                    expr
+                                    wildVar
+                                    castTy
+                                    [ ( DataAlt eqBoxDataCon
+                                      , [coboxVar]
+                                      , Cast inputExpr $ mkSubCo $ mkCoercion tyCons
+                                      ) ]
+
+            -- | FIXME: ClassPred and TuplePred are both handled the same
+            -- within castToPred and getPredEvidence.
+            -- They should be factored out?
+            ClassPred c' [ct] -> go $
+                exprs++
+                [ ( App (App (Var selId) (Type baseTy)) expr
+                  , baseTy
+                  )
+                | selId <- classAllSelIds c'
+                ]
+
+            TuplePred preds -> do
+                uniqs <- getUniquesM
+                let tupelems =
+                        [ mkLocalVar
+                            VanillaId
+                            (mkSystemName uniq (mkVarOcc $ "a"++show j))
+                            (mkAppTy (fst $ splitAppTys t') baseTy)
+                            vanillaIdInfo
+                        | (j,t',uniq) <- zip3 [0..] preds uniqs
+                        ]
+
+                uniq <- getUniqueM
+                let wildName = mkSystemName uniq (mkVarOcc $ "wild")
+                    wildVar = mkLocalVar VanillaId wildName (exprType expr) vanillaIdInfo
+
+                let ret =
+                        [ ( Case expr wildVar (varType $ tupelems!!i)
+                            [ ( DataAlt $ tupleCon ConstraintTuple $ length preds
+                              , tupelems
+                              , Var $ tupelems!!i
+                              )
+                            ]
+                          , baseTy
+                          )
+                        | (i,t) <- zip [0..] preds
+                        ]
+
+                go $ ret++exprs
+
+-- Extracts the type that each of our pieces of evidence is applied to
+extractBaseTy :: Type -> Type
+extractBaseTy t = case classifyPredType t of
+
+    ClassPred _ [x] -> x
+    ClassPred _ _   -> error $ "FIXME: extractBaseTy.ClassPred: only works on univariate classes"
+
+    EqPred rel t1 t2 -> if
+        | t1 == boolTy -> t2
+        | t2 == boolTy -> t1
+        | otherwise -> error $ "FIXME: extractBaseTy.EqPred: "
+            ++"rel="++dbg rel
+            ++"; t1="++dbg t1
+            ++"; t2="++dbg t2
+--         | t1' == Nothing && t2' == Just _ -> t2
+--         where
+--             isApp1 = case splitAppTyMaybe t1 of
+--                 Nothing -> False
+--
+--             isApp2 = case splitAppTyMaybe t2
+--
+
+
 -- | Return all the TyVars that occur anywhere in the Type
 extractTyVars :: Type -> [TyVar]
 extractTyVars t = case getTyVar_maybe t of
@@ -533,42 +638,6 @@ extractTyVars t = case getTyVar_maybe t of
     Nothing -> case tyConAppArgs_maybe t of
         Just xs -> concatMap extractTyVars xs
         Nothing -> concatMap extractTyVars $ snd $ splitAppTys t
-
--- | Given a non-polymorphic PredType (e.g. `Num Float`),
--- return the corresponding dictionary.
-getDictionary :: ModGuts -> Type -> CoreM (Maybe CoreExpr)
-getDictionary guts dictTy = do
-    let dictVar = mkGlobalVar
-            VanillaId
-            (mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "magicDictionaryName"))
-            dictTy
-            vanillaIdInfo
-
-    bnds <- runTcM guts $ do
-        loc <- getCtLoc $ GivenOrigin UnkSkol
-        let nonC = mkNonCanonical $ CtWanted
-                { ctev_pred = varType dictVar
-                , ctev_evar = dictVar
-                , ctev_loc = loc
-                }
-            wCs = mkSimpleWC [nonC]
-        (x, evBinds) <- solveWantedsTcM wCs
-        bnds <- initDsTc $ dsEvBinds evBinds
-
---         liftIO $ do
---             putStrLn $ "dictType="++showSDoc dflags (ppr dictType)
---             putStrLn $ "dictVar="++showSDoc dflags (ppr dictVar)
---
---             putStrLn $ "nonC="++showSDoc dflags (ppr nonC)
---             putStrLn $ "wCs="++showSDoc dflags (ppr wCs)
---             putStrLn $ "bnds="++showSDoc dflags (ppr bnds)
---             putStrLn $ "x="++showSDoc dflags (ppr x)
-
-        return bnds
-
-    case bnds of
-        [NonRec _ dict] -> return $ Just dict
-        otherwise -> return Nothing
 
 --------------------------------------------------------------------------------
 --
@@ -647,6 +716,7 @@ myshow dflags = go 1
         go i (Let (NonRec a e) b)
             = "Let "++getString a++"_"++showSDoc dflags (ppr $ getUnique a)
                                 ++"::"++showSDoc dflags (ppr $ varType a)++"\n"
+            ++white++"("++go (i+1) e++")\n"
             ++white++"("++go (i+1) b++")\n"
             ++drop 4 white
             where
