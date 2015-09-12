@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances,FlexibleContexts,MultiWayIf #-}
+{-# LANGUAGE FlexibleInstances,FlexibleContexts,MultiWayIf,CPP #-}
 module Stabalize.MathInfo
     where
 
@@ -419,16 +419,24 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                     ++"; origType="++dbg (baseTy)
                     ++"; exprType="++dbg (exprType expr)
                     ) $ case splitAppTy_maybe pred of
-                        Nothing -> go exprs
-                        Just (tyCon,tyApp) -> if baseTy/=tyApp
-                            then go exprs
+                        Nothing -> trace " A" $ go exprs
+--                         Just (tyCon,tyApp) -> if baseTy/=tyApp
+                        Just (tyCon,tyApp) -> trace " A'" $ if t1/=tyApp && t2 /=tyApp
+                            then trace (" B: baseTy="++dbg baseTy++"; tyApp="++dbg tyApp)
+                                $ go exprs
                             else do
-                                let pred' = mkAppTy tyCon $ if t1==baseTy
+                                let pred' = mkAppTy tyCon $ if t1==tyApp
                                         then t2
                                         else t1
                                 ret <- getDictionary guts pred'
+--                                 ret2 <- getPredEvidence guts pred' evidenceExprs
+                                GhcPlugins.putMsgS $ " ret ="++dbg ret
+--                                 GhcPlugins.putMsgS $ " ret2="++dbg ret2
                                 case ret of
-                                    Nothing -> go exprs
+                                    Nothing ->
+                                        trace (" B: baseTy="++dbg baseTy++"; tyApp="++dbg tyApp) $
+                                        trace (" B: t1="++dbg t1++"; t2="++dbg t2) $
+                                        trace (" C: pred'="++dbg pred') $  go exprs
                                     Just x -> do
                                         ret <- castToType evidenceExprs pred x
                                         case ret of
@@ -459,11 +467,14 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                                         ) $ return ()
 
                     uniqs <- getUniquesM
+
+                    putMsgS $ " tupelems: baseTy="++dbg baseTy++"; preds="++dbg preds
                     let tupelems =
                             [ mkLocalVar
                                 VanillaId
                                 (mkSystemName uniq (mkVarOcc $ "a"++show j))
-                                (mkAppTy (fst $ splitAppTys t') baseTy)
+                                t'
+--                                 (mkAppTy (fst $ splitAppTys t') baseTy)
                                 vanillaIdInfo
                             | (j,t',uniq) <- zip3 [0..] preds uniqs
                             ]
@@ -483,6 +494,8 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                               )
                             | (i,t) <- zip [0..] preds
                             ]
+
+                    sequence_ [ putMsgS $ "  ret!!"++show i++"="++myshow dynFlags (fst $ ret!!i) | i<-[0..length ret-1]]
 
                     go $ ret++exprs
 
@@ -585,7 +598,8 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                         [ mkLocalVar
                             VanillaId
                             (mkSystemName uniq (mkVarOcc $ "a"++show j))
-                            (mkAppTy (fst $ splitAppTys t') baseTy)
+--                             (mkAppTy (fst $ splitAppTys t') baseTy)
+                            t'
                             vanillaIdInfo
                         | (j,t',uniq) <- zip3 [0..] preds uniqs
                         ]
@@ -622,12 +636,6 @@ extractBaseTy t = case classifyPredType t of
             ++"rel="++dbg rel
             ++"; t1="++dbg t1
             ++"; t2="++dbg t2
---         | t1' == Nothing && t2' == Just _ -> t2
---         where
---             isApp1 = case splitAppTyMaybe t1 of
---                 Nothing -> False
---
---             isApp2 = case splitAppTyMaybe t2
 --
 
 
@@ -646,7 +654,14 @@ runTcM :: ModGuts -> TcM a -> CoreM a
 runTcM guts tcm = do
     env <- getHscEnv
     dflags <- getDynFlags
+#if __GLASGOW_HASKELL__ < 710 || (__GLASGOW_HASKELL__ == 710 && __GLASGOW_HASKELL_PATCHLEVEL1__ < 2)
     (msgs, mr) <- liftIO $ initTc env HsSrcFile False (mg_module guts) tcm
+#else
+    let realSrcSpan = mkRealSrcSpan
+            (mkRealSrcLoc (mkFastString "a") 0 1)
+            (mkRealSrcLoc (mkFastString "b") 2 3)
+    (msgs, mr) <- liftIO $ initTc env HsSrcFile False (mg_module guts) realSrcSpan tcm
+#endif
     let showMsgs (warns, errs) = showSDoc dflags $ vcat
                 $ text "Errors:" : pprErrMsgBag errs
                 ++ text "Warnings:" : pprErrMsgBag warns

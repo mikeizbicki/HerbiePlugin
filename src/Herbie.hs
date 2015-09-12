@@ -47,13 +47,13 @@ pass guts = do
 modBind :: ModGuts -> CoreBind -> CoreM CoreBind
 modBind guts bndr@(Rec _) = return bndr
 modBind guts bndr@(NonRec b e) = do
-    dflags <- getDynFlags
-    putMsgS ""
-    putMsgS $ showSDoc dflags (ppr b)
-        ++ "::"
-        ++ showSDoc dflags (ppr $ varType b)
-    putMsgS $ myshow dflags e
-    return bndr
+--     dflags <- getDynFlags
+--     putMsgS ""
+--     putMsgS $ showSDoc dflags (ppr b)
+--         ++ "::"
+--         ++ showSDoc dflags (ppr $ varType b)
+--     putMsgS $ myshow dflags e
+--     return bndr
     e' <- go [] e
     return $ NonRec b e'
     where
@@ -119,8 +119,8 @@ modBind guts bndr@(NonRec b e) = do
 --                     putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
 --                     putMsgS $ ""
 --                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
-                    putMsgS $ ""
-                    putMsgS $ "  before (raw ): "++myshow dflags e
+--                     putMsgS $ ""
+--                     putMsgS $ "  before (raw ): "++myshow dflags e
 --                     putMsgS $ "  before (raw ): "++show e
 --                     putMsgS $ ""
 --                     StabilizerResult _ e' _ _ <- callHerbie guts e mathInfo
@@ -132,8 +132,8 @@ modBind guts bndr@(NonRec b e) = do
                     putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
                     putMsgS $ "           "++show (errout res)++" bits of error"
 --                     putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
-                    putMsgS $ ""
-                    putMsgS $ "  after  (raw ): "++myshow dflags e'
+--                     putMsgS $ ""
+--                     putMsgS $ "  after  (raw ): "++myshow dflags e'
 --                     putMsgS $ "  after  (raw ): "++show e'
 --                     putMsgS $ ""
                     return e'
