@@ -42,12 +42,14 @@ stabilizeMathExpr :: MathExpr -> IO (StabilizerResult MathExpr)
 stabilizeMathExpr cmdin = do
     let (cmdinLisp,varmap) = getCanonicalLispCmd cmdin
     res <- stabilizeLisp cmdinLisp
+    let res' = res
+            { cmdin  = cmdin
+            , cmdout = herbieOpsToHaskellOps $ fromCanonicalLispCmd (cmdout res,varmap)
+            }
 --     putStrLn $ "stabilizeLisp:  "++cmdout res
+--     putStrLn $ "stabilizeLisp:  "++mathExpr2lisp (cmdout res')
 --     putStrLn $ "stabilizeLisp': "++mathExpr2lisp (fromCanonicalLispCmd (cmdout res,varmap))
-    return $ res
-        { cmdin  = cmdin
-        , cmdout = fromCanonicalLispCmd (cmdout res,varmap)
-        }
+    return res'
 
 -- | Given a Lisp command, return a numerically stable version.
 -- It first checks if the command is in the global database;
@@ -79,6 +81,8 @@ stabilizeLisp cmdin = do
 -- | Run the `herbie` command and return the result
 execHerbie :: String -> IO (StabilizerResult String)
 execHerbie lisp = do
+
+    -- extract the names of all the variables in the expression
     let vars = nub
              $ sort
              $ filter (\x -> x/="("
@@ -87,10 +91,12 @@ execHerbie lisp = do
                           && not (x `elem` monOpList)
                           && not (head x `elem` ("1234567890"::String))
                       ) $ tokenize lisp :: [String]
-        varstr = "("++(intercalate " " vars)++")"
+
+    -- build the command string we will pass to Herbie
+    let varstr = "("++(intercalate " " vars)++")"
         stdin = "(herbie-test "++varstr++" \"cmd\" "++lisp++") \n"
 
-    -- launch Herbie with a fixed seed to ensure reproducable builds
+    -- launch Herbie with a fixed seed to ensure reproducible builds
     (_,stdout,stderr) <- readProcessWithExitCode
         "herbie-exec"
         [ "-r", "#(1461197085 2376054483 1553562171 1611329376 2497620867 2308122621)" ]

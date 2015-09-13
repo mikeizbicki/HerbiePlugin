@@ -30,6 +30,26 @@ monOpList =
 binOpList = [ "/", "-" ] ++ commutativeOpList
 commutativeOpList = [ "*", "+", "max", "min" ]
 
+herbieOpsToHaskellOps :: MathExpr -> MathExpr
+herbieOpsToHaskellOps = go
+    where
+        go (EBinOp op e1 e2) = EBinOp op' (go e1) (go e2)
+            where
+                op' = case op of
+                    "^"    -> "**"
+                    "expt" -> "**"
+                    x      -> x
+
+        go (EMonOp "sqr" e1) = EBinOp "*" (go e1) (go e1)
+        go (EMonOp op e1) = EMonOp op' (go e1)
+            where
+                op' = case op of
+                    "-" -> "negate"
+                    x   -> x
+
+        go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
+        go x = x
+
 -- | Stores the AST for a math expression in a generic form that requires no knowledge of Core syntax.
 data MathExpr
     = EBinOp String MathExpr MathExpr
@@ -101,9 +121,6 @@ unCanonicalizeMathExpr :: (MathExpr,[(String,String)]) -> MathExpr
 unCanonicalizeMathExpr (e,xs) = go e
     where
         xs' = map (\(a,b) -> (b,a)) xs
-
-        -- FIXME: this is a hack to get sqr working
-        go (EMonOp "sqr" e1) = EBinOp "*" (go e1) (go e1)
 
         go (EMonOp op e1) = EMonOp op (go e1)
         go (EBinOp op e1 e2) = EBinOp op (go e1) (go e2)

@@ -6,7 +6,7 @@ import Class
 import DsBinds
 import DsMonad
 import ErrUtils
-import GhcPlugins
+import GhcPlugins hiding (trace)
 import Unique
 import MkId
 import PrelNames
@@ -24,6 +24,9 @@ import Stabalize.MathExpr
 
 import Prelude
 import Show
+
+trace a b = b
+traceM a = return ()
 
 -- | The fields of this type correspond to the sections of a function type.
 --
@@ -144,6 +147,41 @@ herbie2lisp dflags herbie = mathExpr2lisp (hexpr herbie)
 
 findExpr :: MathInfo -> String -> Maybe (Expr Var)
 findExpr herbie str = lookup str (getExprs herbie)
+
+-- | Pretty print a math expression
+pprMathInfo :: MathInfo -> String
+pprMathInfo mathInfo = go False $ hexpr mathInfo
+    where
+        isLitOrLeaf :: MathExpr -> Bool
+        isLitOrLeaf (ELit _ ) = True
+        isLitOrLeaf (ELeaf _) = True
+        isLitOrLeaf _         = False
+
+        go :: Bool -> MathExpr -> String
+        go b e = if b && not (isLitOrLeaf e)
+            then "("++str++")"
+            else str
+            where
+                str = case e of
+                    EMonOp op e1 -> op++" "++(go True e1)
+
+                    EBinOp op e1 e2 -> go parens1 e1++" "++op++" "++go parens2 e2
+                        where
+                            parens1 = case e1 of
+                                (EBinOp op' _ _) -> op/=op'
+                                _ -> True
+
+                            parens2 = case e2 of
+                                (EBinOp op' _ _) -> op/=op'
+                                _ -> True
+
+                    ELit l -> if toRational (floor l) == l
+                        then show (floor l :: Integer)
+                        else show (fromRational l :: Double)
+
+                    ELeaf l -> case lookup l $ getExprs mathInfo of
+                        Just (Var _) -> l
+                        _            -> "???"
 
 
 ----------------------------------------
@@ -430,8 +468,8 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                                         else t1
                                 ret <- getDictionary guts pred'
 --                                 ret2 <- getPredEvidence guts pred' evidenceExprs
-                                GhcPlugins.putMsgS $ " ret ="++dbg ret
---                                 GhcPlugins.putMsgS $ " ret2="++dbg ret2
+                                traceM $ " ret ="++dbg ret
+--                                 traceM $ " ret2="++dbg ret2
                                 case ret of
                                     Nothing ->
                                         trace (" B: baseTy="++dbg baseTy++"; tyApp="++dbg tyApp) $
@@ -468,7 +506,7 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
 
                     uniqs <- getUniquesM
 
-                    putMsgS $ " tupelems: baseTy="++dbg baseTy++"; preds="++dbg preds
+                    traceM $ " tupelems: baseTy="++dbg baseTy++"; preds="++dbg preds
                     let tupelems =
                             [ mkLocalVar
                                 VanillaId
@@ -495,7 +533,7 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                             | (i,t) <- zip [0..] preds
                             ]
 
-                    sequence_ [ putMsgS $ "  ret!!"++show i++"="++myshow dynFlags (fst $ ret!!i) | i<-[0..length ret-1]]
+                    sequence_ [ traceM $ "  ret!!"++show i++"="++myshow dynFlags (fst $ ret!!i) | i<-[0..length ret-1]]
 
                     go $ ret++exprs
 

@@ -112,7 +112,8 @@ modBind guts bndr@(NonRec b e) = do
                         ++ "::"
                         ++ showSDoc dflags (ppr $ varType b)
                     putMsgS $ "  type   = "++showSDoc dflags (ppr $ getParam $ numType mathInfo)
-                    putMsgS $ "  before = "++herbie2lisp dflags mathInfo
+                    putMsgS $ "  before = "++pprMathInfo mathInfo
+--                     putMsgS $ "  before = "++herbie2lisp dflags mathInfo
 --                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
 
 --                     putMsgS $ "    expression "++herbie2lisp dflags herbie
@@ -121,7 +122,6 @@ modBind guts bndr@(NonRec b e) = do
 --                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
 --                     putMsgS $ ""
 --                     putMsgS $ "  before (raw ): "++myshow dflags e
---                     putMsgS $ "  before (raw ): "++show e
 --                     putMsgS $ ""
 --                     StabilizerResult _ e' _ _ <- callHerbie guts e mathInfo
 --                     e' <- stabilizeMathInfo guts mathInfo
@@ -129,13 +129,13 @@ modBind guts bndr@(NonRec b e) = do
                     let mathInfo' = mathInfo { hexpr = cmdout res }
                     e' <- mathInfo2expr guts mathInfo'
                     putMsgS $ "           "++show (errin res)++" bits of error"
-                    putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
+--                     putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
+                    putMsgS $ "  after  = "++pprMathInfo mathInfo'
                     putMsgS $ "           "++show (errout res)++" bits of error"
 --                     putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
 --                     putMsgS $ ""
---                     putMsgS $ "  after  (raw ): "++myshow dflags e'
---                     putMsgS $ "  after  (raw ): "++show e'
---                     putMsgS $ ""
+                    putMsgS $ "  after  (raw ): "++myshow dflags e'
+                    putMsgS $ ""
                     return e'
 
 -- | Return a list with the given variable if the variable is a dictionary or tuple of dictionaries,
