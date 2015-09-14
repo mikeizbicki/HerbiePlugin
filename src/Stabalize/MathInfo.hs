@@ -213,7 +213,9 @@ pprMathInfo mathInfo = go 1 False $ hexpr mathInfo
 mkMathInfo :: DynFlags -> [Var] -> Type -> Expr Var -> Maybe MathInfo
 mkMathInfo dflags dicts bndType e = case validType of
     Nothing -> Nothing
-    Just t -> Just $ MathInfo hexpr (pt { getParam = t}) exprs
+    Just t -> if mathExprDepth hexpr>1
+        then Just $ MathInfo hexpr (pt { getParam = t}) exprs
+        else Nothing
     where
         (hexpr,exprs) = go e []
 

@@ -59,6 +59,11 @@ data MathExpr
     | ELeaf String
     deriving (Show,Eq)
 
+mathExprDepth :: MathExpr -> Int
+mathExprDepth (EBinOp _ e1 e2) = 1+max (mathExprDepth e1) (mathExprDepth e2)
+mathExprDepth (EMonOp _ e1   ) = 1+mathExprDepth e1
+mathExprDepth _ = 0
+
 getCanonicalLispCmd :: MathExpr -> (String,[(String,String)])
 getCanonicalLispCmd me = (mathExpr2lisp me',varmap)
     where

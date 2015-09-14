@@ -36,6 +36,7 @@ plugin = defaultPlugin
 
 install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 install opts todo = do
+    putMsgS "Compiling with Herbie floating point stabilization"
     reinitializeGlobals
     return (CoreDoPluginPass "MathInfo" pass : todo)
 
@@ -87,13 +88,22 @@ modBind guts bndr@(NonRec b e) = do
                         b' <- go (extractDicts a'++dicts) b
                         return $ Lam a' b'
 
-                    -- Non-recursive let binding:
+                    -- Let binding:
                     -- If the variable is a dictionary, add it to the list;
                     -- Always recurse into the subexpression
-                    Let bndr@(NonRec a e) b -> do
+                    Let (NonRec a e) b -> do
                         let a' = undeadenId a
+                        e' <- go dicts e
                         b' <- go (extractDicts a'++dicts) b
-                        return $ Let (NonRec a' e) b'
+                        return $ Let (NonRec a' e') b'
+
+                    Let (Rec bndrs) expr -> do
+                        bndrs' <- forM bndrs $ \(a,e) -> do
+                            let a' = undeadenId a
+                            e' <- go dicts e
+                            return (a',e')
+                        expr' <- go dicts expr
+                        return $ Let (Rec bndrs') expr'
 
                     -- Function application:
                     -- Math expressions may appear on either side, so recurse on both
@@ -128,7 +138,7 @@ modBind guts bndr@(NonRec b e) = do
                     Type t     -> return $ Type t
                     Coercion c -> return $ Coercion c
 
-                -- we found a math expression, so process it
+                -- We found a math expression, so process it
                 Just mathInfo -> do
                     putMsgS $ "Found math expression within binding "
                         ++ showSDoc dflags (ppr b)
