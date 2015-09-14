@@ -10,11 +10,14 @@ import GhcPlugins hiding (trace)
 import Unique
 import MkId
 import PrelNames
+import UniqSupply
 import TcRnMonad
 import TcSimplify
 import Type
 
 import Control.Monad
+import Control.Monad.Except
+import Control.Monad.Trans
 import Data.Char
 import Data.List
 import Data.Maybe
@@ -27,6 +30,19 @@ import Show
 
 trace a b = b
 traceM a = return ()
+
+--------------------------------------------------------------------------------
+
+instance MonadUnique m => MonadUnique (ExceptT e m) where
+    getUniqueSupplyM = lift getUniqueSupplyM
+
+instance (Monad m, HasDynFlags m) => HasDynFlags (ExceptT e m) where
+    getDynFlags = lift getDynFlags
+
+instance MonadThings m => MonadThings (ExceptT e m) where
+    lookupThing name = lift $ lookupThing name
+
+--------------------------------------------------------------------------------
 
 -- | The fields of this type correspond to the sections of a function type.
 --
@@ -150,22 +166,22 @@ findExpr herbie str = lookup str (getExprs herbie)
 
 -- | Pretty print a math expression
 pprMathInfo :: MathInfo -> String
-pprMathInfo mathInfo = go False $ hexpr mathInfo
+pprMathInfo mathInfo = go 1 False $ hexpr mathInfo
     where
         isLitOrLeaf :: MathExpr -> Bool
         isLitOrLeaf (ELit _ ) = True
         isLitOrLeaf (ELeaf _) = True
         isLitOrLeaf _         = False
 
-        go :: Bool -> MathExpr -> String
-        go b e = if b && not (isLitOrLeaf e)
+        go :: Int -> Bool -> MathExpr -> String
+        go i b e = if b && not (isLitOrLeaf e)
             then "("++str++")"
             else str
             where
                 str = case e of
-                    EMonOp op e1 -> op++" "++(go True e1)
+                    EMonOp op e1 -> op++" "++(go i True e1)
 
-                    EBinOp op e1 e2 -> go parens1 e1++" "++op++" "++go parens2 e2
+                    EBinOp op e1 e2 -> go i parens1 e1++" "++op++" "++go i parens2 e2
                         where
                             parens1 = case e1 of
                                 (EBinOp op' _ _) -> op/=op'
@@ -176,12 +192,20 @@ pprMathInfo mathInfo = go False $ hexpr mathInfo
                                 _ -> True
 
                     ELit l -> if toRational (floor l) == l
-                        then show (floor l :: Integer)
+                        then if length (show (floor l :: Integer)) < 10
+                            then show (floor l :: Integer)
+                            else show (fromRational l :: Double)
                         else show (fromRational l :: Double)
 
                     ELeaf l -> case lookup l $ getExprs mathInfo of
                         Just (Var _) -> l
                         _            -> "???"
+
+                    EIf cond e1 e2 -> "if "++go i False cond++"\n"
+                        ++white++"then "++go (i+1) False e1++"\n"
+                        ++white++"else "++go (i+1) False e2
+                        where
+                            white = replicate (4*i) ' '
 
 
 ----------------------------------------
@@ -260,7 +284,7 @@ mkMathInfo dflags dicts bndType e = case validType of
         -- everything else
         go e exprs = (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
 
-mathInfo2expr :: ModGuts -> MathInfo -> CoreM (Expr CoreBndr)
+mathInfo2expr :: ModGuts -> MathInfo -> ExceptT String CoreM CoreExpr
 mathInfo2expr guts herbie = go (hexpr herbie)
     where
         pt = numType herbie
@@ -280,10 +304,7 @@ mathInfo2expr guts herbie = go (hexpr herbie)
 
         -- if statements
         go (EIf cond a1 a2) = do
-            mcond' <- go cond >>= castToType (map Var $ getDicts pt) boolTy
-            let cond' = case mcond' of
-                    Just x -> x
-                    Nothing -> error $ "EIf:"
+            cond' <- go cond >>= castToType (map Var $ getDicts pt) boolTy
             a1' <- go a1
             a2' <- go a2
 
@@ -360,39 +381,43 @@ getVar guts opstr = do
                               && (case gre_par x of NoParent -> False; _ -> True)
 
 -- | Like "decorateFunction", but first finds the function variable given a string.
-getDecoratedFunction :: ModGuts -> String -> Type -> [Var] -> CoreM CoreExpr
+getDecoratedFunction :: ModGuts -> String -> Type -> [Var] -> ExceptT String CoreM CoreExpr
 getDecoratedFunction guts str t preds = do
-    f <- getVar guts str
+    f <- lift $ getVar guts str
     decorateFunction guts f t preds
 
 -- | Given a variable that contains a function,
 -- the type the function is being applied to,
 -- and all in scope predicates,
 -- apply the type and any needed dictionaries to the function.
-decorateFunction :: ModGuts -> Var -> Type -> [Var] -> CoreM CoreExpr
+decorateFunction :: ModGuts -> Var -> Type -> [Var] -> ExceptT String CoreM CoreExpr
 decorateFunction guts f t preds = do
     let ([v],unquantified) = extractQuantifiers $ varType f
         (cxt,_) = extractContext unquantified
         cxt' = substTysWith [v] [t] cxt
 
-    cxt'' <- fmap concat $ mapM getDict cxt'
+    cxt'' <- mapM getDict cxt'
 
     return $ mkApps (App (Var f) (Type t)) cxt''
     where
-        getDict :: PredType -> CoreM [CoreExpr]
+        getDict :: PredType -> ExceptT String CoreM CoreExpr
         getDict pred = do
-            ret <- getDictionary guts pred
-            case ret of
-                Just x -> return [x]
-                Nothing -> do
-                    ret <- getPredEvidence guts pred (map Var preds)
-                    case ret of
-                        Just x -> return [x]
-                        Nothing -> error $ "getDict: f="++getString f++"; pred="++showSDoc dynFlags (ppr pred)
+            catchError
+                (getDictionary guts pred)
+                (\_ -> getPredEvidence guts pred (map Var preds))
+
+--             ret <- getDictionary guts pred
+--             case ret of
+--                 Right x -> return [x]
+--                 Left err1 -> do
+--                     ret <- getPredEvidence guts pred (map Var preds)
+--                     case ret of
+--                         Right x -> return [x]
+--                         Left err2 -> error $ "getDict: f="++getString f++"; pred="++showSDoc dynFlags (ppr pred)
 
 -- | Given a non-polymorphic PredType (e.g. `Num Float`),
 -- return the corresponding dictionary.
-getDictionary :: ModGuts -> Type -> CoreM (Maybe CoreExpr)
+getDictionary :: ModGuts -> Type -> ExceptT String CoreM CoreExpr
 getDictionary guts dictTy = do
     let dictVar = mkGlobalVar
             VanillaId
@@ -400,7 +425,7 @@ getDictionary guts dictTy = do
             dictTy
             vanillaIdInfo
 
-    bnds <- runTcM guts $ do
+    bnds <- lift $ runTcM guts $ do
         loc <- getCtLoc $ GivenOrigin UnkSkol
         let nonC = mkNonCanonical $ CtWanted
                 { ctev_pred = varType dictVar
@@ -423,26 +448,31 @@ getDictionary guts dictTy = do
         return bnds
 
     case bnds of
-        [NonRec _ dict] -> return $ Just dict
-        otherwise -> return Nothing
+        [NonRec _ dict] -> return dict
+        otherwise -> throwError $
+            "  WARNING: Cannot satisfy the constraint: "++dbg dictTy
 
 -- | Given a predicate for which we don't have evidence
 -- and a list of expressions that contain evidence for predicates,
 -- construct an expression that contains evidence for the given predicate.
-getPredEvidence :: ModGuts -> PredType -> [CoreExpr] -> CoreM (Maybe CoreExpr)
+getPredEvidence :: ModGuts -> PredType -> [CoreExpr] -> ExceptT String CoreM CoreExpr
 getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) | x <- evidenceExprs ]
     where
+
+        go :: [(CoreExpr,Type)] -> ExceptT String CoreM CoreExpr
+
+        -- We've looked at all the evidence, but didn't find anything
+        go [] = throwError $
+            "  WARNING: Cannot satisfy the constraint: "++dbg pred
 
         -- Recursively descend into all the available predicates.
         -- The list tracks both the evidence expression (this will change in recursive descent),
         -- and the baseTy that gave rise to the expression (this stays constant).
-        go :: [(CoreExpr,Type)] -> CoreM (Maybe (CoreExpr))
-        go []                    = return Nothing
         go ((expr,baseTy):exprs) = if exprType expr == pred
 
             -- The expression we've found matches the predicate.
             -- We're done!
-            then return $ Just expr
+            then return expr
 
             -- The expression doesn't match the predicate,
             -- so we recurse by searching for sub-predicates within expr
@@ -466,20 +496,26 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                                 let pred' = mkAppTy tyCon $ if t1==tyApp
                                         then t2
                                         else t1
-                                ret <- getDictionary guts pred'
---                                 ret2 <- getPredEvidence guts pred' evidenceExprs
-                                traceM $ " ret ="++dbg ret
---                                 traceM $ " ret2="++dbg ret2
-                                case ret of
-                                    Nothing ->
-                                        trace (" B: baseTy="++dbg baseTy++"; tyApp="++dbg tyApp) $
-                                        trace (" B: t1="++dbg t1++"; t2="++dbg t2) $
-                                        trace (" C: pred'="++dbg pred') $  go exprs
-                                    Just x -> do
-                                        ret <- castToType evidenceExprs pred x
-                                        case ret of
-                                            Just x -> return $ Just x
-                                            Nothing -> error ("  Just: tyApp="++dbg tyApp++"; x="++dbg x++"; pred="++dbg pred)
+--                                 catchError
+--                                     (getDictionary guts pred')
+--                                     (castToType evidenceExprs pred x)
+--
+                                getDictionary guts pred' >>= castToType evidenceExprs pred
+
+--                                 ret <- getDictionary guts pred'
+-- --                                 ret2 <- getPredEvidence guts pred' evidenceExprs
+--                                 traceM $ " ret ="++dbg ret
+-- --                                 traceM $ " ret2="++dbg ret2
+--                                 case ret of
+--                                     Left _ ->
+--                                         trace (" B: baseTy="++dbg baseTy++"; tyApp="++dbg tyApp) $
+--                                         trace (" B: t1="++dbg t1++"; t2="++dbg t2) $
+--                                         trace (" C: pred'="++dbg pred') $ go exprs
+--                                     Right x -> do
+--                                         ret <- castToType evidenceExprs pred x
+--                                         case ret of
+--                                             Right x -> return x
+-- --                                             Nothing -> error ("  Just: tyApp="++dbg tyApp++"; x="++dbg x++"; pred="++dbg pred)
 
                 -- We've found a class dictionary.
                 -- Recurse into each field (selId) of the dictionary.
@@ -540,15 +576,20 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
 -- | Given some evidence, an expression, and a type:
 -- try to prove that the expression can be cast to the type.
 -- If it can, return the cast expression.
-castToType :: [CoreExpr] -> Type -> CoreExpr -> CoreM (Maybe CoreExpr)
+castToType :: [CoreExpr] -> Type -> CoreExpr -> ExceptT String CoreM CoreExpr
 castToType xs castTy inputExpr = if exprType inputExpr == castTy
-    then return $ Just inputExpr
+    then return inputExpr
     else go [ (x, extractBaseTy $ exprType x) | x <- xs ]
     where
 
 
-        go :: [(CoreExpr,Type)] -> CoreM (Maybe (CoreExpr))
-        go []                    = return Nothing
+        go :: [(CoreExpr,Type)] -> ExceptT String CoreM CoreExpr
+
+        -- base case: we've searched through all the evidence, but couldn't create a cast
+        go [] = throwError $
+            "  WARNING: Could not cast expression of type "++dbg (exprType inputExpr)++" to "++dbg castTy
+
+        -- recursively try each evidence expression looking for a cast
         go ((expr,baseTy):exprs) = case classifyPredType $ exprType expr of
 
             IrredPred _ -> go exprs
@@ -563,7 +604,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                     -- on the inputTyRHS and castTyRHS types.
                     -- As long as the type constructors match,
                     -- we might be able to do a cast at any level of the peeling
-                    goEqPred :: [TyCon] -> Type -> Type -> CoreM (Maybe CoreExpr)
+                    goEqPred :: [TyCon] -> Type -> Type -> ExceptT String CoreM CoreExpr
                     goEqPred tyCons castTyRHS inputTyRHS =
 --                       trace
 --                       (" goEqPred: tyCons="++dbg tyCons
@@ -590,7 +631,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                             -- but the final Coercion needs to be Representational.
                             -- mkSubCo converts from Nominal into Representational.
                             -- See https://ghc.haskell.org/trac/ghc/wiki/RolesImplementation
-                            mkCast :: Bool -> CoreM (Maybe CoreExpr)
+                            mkCast :: Bool -> ExceptT String CoreM CoreExpr
                             mkCast isFlipped = do
                                 coboxUniq <- getUniqueM
                                 let coboxName = mkSystemName coboxUniq (mkVarOcc $ "cobox")
@@ -610,7 +651,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                                     wildType = exprType expr
                                     wildVar = mkLocalVar VanillaId wildName wildType vanillaIdInfo
 
-                                return $ Just $ Case
+                                return $ Case
                                     expr
                                     wildVar
                                     castTy

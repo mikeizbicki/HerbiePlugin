@@ -15,6 +15,8 @@ import PrelNames
 import TcRnMonad
 import TcSimplify
 
+import Control.Monad
+import Control.Monad.Except
 import Data.Maybe
 
 import Debug.Trace
@@ -100,43 +102,52 @@ modBind guts bndr@(NonRec b e) = do
                         b' <- go dicts b
                         return $ App a' b'
 
-                    -- FIXME: needs to be exhaustive
-                    otherwise -> do
---                         putMsgS $ "  not mathexpr: " ++ showSDoc dflags (ppr e)
-                        return e
+                    -- Case statement:
+                    -- Math expressions may appear in the condition or in any of the branches
+                    Case cond w t es -> do
+                        cond' <- go dicts cond
+                        es' <- forM es $ \ (altcon, xs, expr) -> do
+                            expr' <- go dicts expr
+                            return $ (altcon, xs, expr')
+                        return $ Case cond' w t es'
+
+                    -- Ticks and Casts are just annotating extra information on an expression.
+                    -- We ignore the extra information and recurse into the expression.
+                    Tick a b -> do
+                        b' <- go dicts b
+                        return $ Tick a b'
+
+                    Cast a b -> do
+                        a' <- go dicts a
+                        return $ Cast a' b
+
+                    -- There's nothing to do for these statements.
+                    -- They form the recursion's base case.
+                    Var v      -> return $ Var v
+                    Lit l      -> return $ Lit l
+                    Type t     -> return $ Type t
+                    Coercion c -> return $ Coercion c
 
                 -- we found a math expression, so process it
                 Just mathInfo -> do
                     putMsgS $ "Found math expression within binding "
                         ++ showSDoc dflags (ppr b)
-                        ++ "::"
+                        ++ " :: "
                         ++ showSDoc dflags (ppr $ varType b)
-                    putMsgS $ "  type   = "++showSDoc dflags (ppr $ getParam $ numType mathInfo)
-                    putMsgS $ "  before = "++pprMathInfo mathInfo
---                     putMsgS $ "  before = "++herbie2lisp dflags mathInfo
---                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
-
---                     putMsgS $ "    expression "++herbie2lisp dflags herbie
---                     putMsgS $ "  before (lisp): "++herbie2lisp dflags herbie
---                     putMsgS $ ""
---                     putMsgS $ "  before (core): "++showSDoc dflags (ppr e)
---                     putMsgS $ ""
---                     putMsgS $ "  before (raw ): "++myshow dflags e
---                     putMsgS $ ""
---                     StabilizerResult _ e' _ _ <- callHerbie guts e mathInfo
---                     e' <- stabilizeMathInfo guts mathInfo
+                    putMsgS $ "  original expression = "++pprMathInfo mathInfo
                     res <- liftIO $ stabilizeMathExpr $ hexpr mathInfo
                     let mathInfo' = mathInfo { hexpr = cmdout res }
-                    e' <- mathInfo2expr guts mathInfo'
-                    putMsgS $ "           "++show (errin res)++" bits of error"
---                     putMsgS $ "  after  = "++herbie2lisp dflags mathInfo'
-                    putMsgS $ "  after  = "++pprMathInfo mathInfo'
-                    putMsgS $ "           "++show (errout res)++" bits of error"
---                     putMsgS $ "  after  (core): "++showSDoc dflags (ppr e')
---                     putMsgS $ ""
-                    putMsgS $ "  after  (raw ): "++myshow dflags e'
-                    putMsgS $ ""
-                    return e'
+                    putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
+                    putMsgS $ "  original error = "++show (errin res)++" bits"
+                    putMsgS $ "  improved error = "++show (errout res)++" bits"
+                    ret <- runExceptT $ mathInfo2expr guts mathInfo'
+                    case ret of
+                        Left str -> do
+                            putMsgS "  WARNING: Not substituting the improved expression into your code"
+                            putMsgS str
+                            return e
+                        Right e' -> do
+                            return e'
 
 -- | Return a list with the given variable if the variable is a dictionary or tuple of dictionaries,
 -- otherwise return [].

@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs,RebindableSyntax,CPP,FlexibleContexts,FlexibleInstances #-}
+{-# LANGUAGE GADTs,RebindableSyntax,CPP,FlexibleContexts,FlexibleInstances,ConstraintKinds #-}
 module Main
 -- module Test1
     where
@@ -10,17 +10,10 @@ import qualified Prelude as P
 --------------------------------------------------------------------------------
 -- type signature tests
 
--- #define f1(x1) (sqrt ((x1)+1) - sqrt (x1))
+#define f1(x1) (sqrt ((x1)+1) - sqrt (x1))
 
-{-
--- -- {-# NOINLINE test1 #-}
 test1 :: (RationalField a, Real a) => a -> a
--- test1 :: (Real a, Floating a) => a -> a
--- test1 :: Float -> Float
--- test1 x1 = x1 + 1.1
 test1 x1 = f1(x1)
--- test1 x1 = x1*sqrt x1
--- test1 x1 = fromRational (toRational (1.1::Float))
 
 test2 :: Float -> Float
 test2 x1 = 1.1+x1
@@ -42,27 +35,30 @@ test6 x1 str = show $ f1(x1)
 test7 :: Semigroup a => a -> a
 test7 x1 = x1+x1+x1+x1+x1
 
--}
+test8 :: Float -> Float
+test8 x1 = case x1 of
+    1.0 -> f1(x1)
+    2.0 -> x1
 
 --------------------------------------------------------------------------------
 
 {-
--- example1 :: Float -> Float -> Float
--- example1 x1 x2 = sqrt (x1*x1 + x2*x2)
+example1 :: Float -> Float -> Float
+example1 x1 x2 = sqrt (x1*x1 + x2*x2)
 
--- example2 x = exp(log(x)+8)
---
--- example3 x = sqrt(x*x +1) -1
---
--- example4 x = exp(x)-1
---
--- example5 x = log(1+x)
---
--- example6 x y = sqrt(x+ y) - sqrt(y)
+example2 x = exp(log(x)+8)
 
--- example7 k r a = k*(r-a)^3
---
--- example8 k r a = k*(r-a)^2
+example3 x = sqrt(x*x +1) -1
+
+example4 x = exp(x)-1
+
+example5 x = log(1+x)
+
+example6 x y = sqrt(x+ y) - sqrt(y)
+
+example7 k r a = k*(r-a)^3
+
+example8 k r a = k*(r-a)^2
 
 example9 x y = sin(x - y)
 
@@ -173,29 +169,36 @@ example60 a b c = -b + sqrt(b*b-4*a*c)/(2*a)
 example61 a c an cn = log(exp(a)*an + exp(c)*cn) - log(an+cn)
 
 example62 x = sqrt(sin(x)) - sqrt(x)
-
 example63 x = log(1+x)
 
 example64 a b = a * b / (1 - b + a * b)
 
+example65 :: Logic Float ~ Bool => Float -> Float -> Float
 example65 a b = b*sqrt(a * a + 1.0)
 
--- example66 x y = x * y * x*pi/y
+example65' :: Real a => a -> a
+example65' a = sqrt(a * a + 1.0)
+
+example66 :: Float -> Float -> Float
+example66 x y = x * y * x*pi/y
 
 example67 x = sqrt(x + 1) - sqrt(x - 1)
 
 -- example68 x = cos(x + 1) * x^2
-
+example69 :: RealOrd a => a -> a -> a
 example69 a b = b*(a/b - log(1 + a/b))
 
+example70 :: RealOrd a => a -> a -> a
 example70 a b = b*(a/b - 1 - log(a/b))
 
 -- example71 x = (6/(x^99))*(x^101)
 
-example72 x = (1/(x^99))*(x^101)
 
-example73 x = (1/(x^100))*(x^100)
+-- example72 x = (1/(x^99))*(x^101)
 
+-- example73 x = (1/(x^100))*(x^100)
+
+example74 :: RealOrd a => a -> a -> a -> a
 example74 x y z = cos(sqrt(x*x+y*y+z*z))
 
 example75 x = sqrt(sqrt(x*x+1)+1)
@@ -210,37 +213,46 @@ example78 a b x = x*x*a+x*(a+b) +x*b
 
 example80 x = sqrt(x+1)-sqrt 1
 
--- example81 x = (x+1)-x
+example81 :: Real a => a -> a
+example81 x = (x+1)-x
 
 example82 x = sqrt(x+100)-sqrt(x)
 
 example83 x = 1-cos(x)
 
+example84 :: Real a => a -> a -> a
 example84 u v = sqrt(sqrt(u^2 + v^2) - u)
 
+example85 :: Real a => a -> a
 example85 x = exp(log(x))
 
-example86 x = sqrt(x + 1) - sqrt(x) + sin(x - 1)
+example86 :: Real a => a -> a
+example86 x = sqrt(x + 1) - sqrt x + sin(x - 1)
 
+-- example87 :: (Floating a, Real a, Ord a) => a -> a
+-- -- example87 :: Float -> Float
+example87 :: Real a => a -> a
 example87 x = exp x / sqrt(exp x - 1) * sqrt x
 
+example88 :: Real a => a -> a
 example88 x = (exp(x) - 1) / x
 
+example89 :: Real a => a -> a
 example89 x = sqrt(x + 2) - sqrt(x)
 -}
-
---------------------------------------------------------------------------------
-
-test :: Real x => x -> x -> x
-test x y = y*x+1
 
 --------------------------------------------------------------------------------
 -- main
 
 
 main = do
-    P.putStrLn $ show $ test (5::Float) (2::Float)
+--     P.putStrLn $ show $ test (5::Float) (2::Float)
+--     P.putStrLn $ show $ test (4::Float) (4::Float)
+--     P.putStrLn $ show $ test (3::Float) (6::Float)
 
+--     P.putStrLn $ show $ example84 (5::Float) (5::Float)
+--     P.putStrLn $ show $ example85 (5::Float)
+--     P.putStrLn $ show $ example86 (5::Float)
 --     P.putStrLn $ show $ example87 (5::Float)
 --     P.putStrLn $ show $ example88 (5::Float)
 --     P.putStrLn $ show $ example89 (5::Float)
