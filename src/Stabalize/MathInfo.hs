@@ -28,7 +28,8 @@ import Stabalize.MathExpr
 import Prelude
 import Show
 
-trace a b = b
+import Debug.Trace hiding (traceM)
+-- trace a b = b
 traceM a = return ()
 
 --------------------------------------------------------------------------------
@@ -210,48 +211,48 @@ pprMathInfo mathInfo = go 1 False $ hexpr mathInfo
 
 ----------------------------------------
 
--- | Returns True only if it makes sense to stabilize expressions of this type.
--- It makes sense to stabilize all polymorphic types and only IEEE based concrete types.
---
--- FIXME: We're ignoring potentially important concrete types like `Complex`.
-validType :: Type -> Bool
-validType t = case splitForAllTy_maybe t of
-    Just _ -> True
-    Nothing -> case tyConAppTyCon_maybe t of
-        Just tyCon -> tyCon==floatTyCon || tyCon==doubleTyCon
-        Nothing -> False
+-- If the given expression is a math expression,
+-- returns the type of the variable that the math expression operates on.
+varTypeIfValidExpr :: CoreExpr -> Maybe Type
+varTypeIfValidExpr e = case e of
+
+    -- might be a binary math operation
+    (App (App (App (App (Var v) (Type t)) _) _) _) -> if var2str v `elem` binOpList
+        then if isValidType t
+            then Just t
+            else Nothing
+        else Nothing
+
+    -- might be a unary math operation
+    (App (App (App (Var v) (Type t)) _) _) -> if var2str v `elem` monOpList
+        then if isValidType t
+            then Just t
+            else Nothing
+        else Nothing
+
+    -- first function is anything else means that we're not a math expression
+    _ -> Nothing
+
+    where
+        isValidType :: Type -> Bool
+        isValidType t = isTyVarTy t || case splitTyConApp_maybe t of
+            Nothing -> True
+            Just (tyCon,_) -> tyCon == floatTyCon || tyCon == doubleTyCon
 
 mkMathInfo :: DynFlags -> [Var] -> Type -> Expr Var -> Maybe MathInfo
-mkMathInfo dflags dicts bndType e = if not (validType $ exprType e)
-    then Nothing
-    else case validExpr of
+mkMathInfo dflags dicts bndType e = case varTypeIfValidExpr e of
         Nothing -> Nothing
         Just t -> if mathExprDepth hexpr>1
             then Just $ MathInfo hexpr (pt { getParam = t}) exprs
             else Nothing
+
     where
         (hexpr,exprs) = go e []
 
         -- this should never return Nothing if validExpr is not Nothing
         pt = case mkParamType dicts bndType of
             Just pt -> pt
-            Nothing -> error $ "mkMathInfo: "++dbg validExpr
-
-        -- We only return a MathInfo if the input is a math expression.
-        -- We look at the first function call to determine if it is a math expression or not.
-        validExpr = case e of
-            -- first function is binary
-            (App (App (App (App (Var v) (Type t)) _) _) _) -> if var2str v `elem` binOpList
-                then Just t
-                else Nothing
-
-            -- first function is unary
-            (App (App (App (Var v) (Type t)) _) _) -> if var2str v `elem` monOpList
-                then Just t
-                else Nothing
-
-            -- first function is anything else means that we're not a math expression
-            _ -> Nothing
+            Nothing -> error $ "mkMathInfo: "++dbg (varTypeIfValidExpr e)
 
         -- recursively converts the `Expr Var` into a MathExpr and a dictionary
         go :: Expr Var

@@ -1,44 +1,67 @@
 {-# LANGUAGE GADTs,RebindableSyntax,CPP,FlexibleContexts,FlexibleInstances,ConstraintKinds #-}
 module Main
--- module Test1
     where
 
 import SubHask
 import qualified Prelude as P
--- import Prelude as P
 
 --------------------------------------------------------------------------------
--- type signature tests
 
-#define f1(x1) (sqrt ((x1)+1) - sqrt (x1))
+-- This section tests that Herbie gets run on the correct types.
+-- Herbie should be run on all the functions below.
 
-test1 :: (RationalField a, Real a) => a -> a
-test1 x1 = f1(x1)
+#define f1(x) (sqrt ((x)+1) - sqrt (x))
 
-test2 :: Float -> Float
-test2 x1 = 1.1+x1
+herbie1 :: Real a => a -> a
+herbie1 x = f1(x)
 
-test3 :: Float -> String
-test3 x1 = show $ x1+x1+sqrt x1
+herbie2 :: Real a => a -> a -> a -> a -> a
+herbie2 a b c d = f1(a)+f1(b)+f1(c)+f1(d)
 
-test4 :: String -> String
-test4 str = show $ x1+x1+sqrt x1
+herbie3 :: Float -> Float
+herbie3 x = f1(x)
+
+herbie4 :: String -> String
+herbie4 str = show $ f1(x1)
+      where
+          x1 = fromIntegral (length str) :: Float
+
+herbie5 :: (Show a, Real a) => String -> a -> String
+herbie5 str x1 = show $ f1(x1)
+
+herbie6 :: (Show a, Real a) => a -> String -> String
+herbie6 x1 str = show $ f1(x1)
+
+herbie7 :: Semigroup a => a -> a
+herbie7 x1 = x1+x1+x1+x1+x1
+
+herbie8 :: Float -> Float
+herbie8 x1 = case x1 of
+      1.0 -> f1(x1)
+      2.0 -> x1
+
+herbie9 :: Float -> Float
+herbie9 x1 = go 4 x1
     where
-        x1 = fromIntegral (length str) :: Float
+        go :: Float -> Float -> Float
+        go 0 b = b
+        go a b = go (a-1) (sqrt (b-1))
 
-test5 :: (Show a, Real a) => String -> a -> String
-test5 str x1 = show $ f1(x1)
+-- Herbie should not get run on any of the functions in this section.
 
-test6 :: (Show a, Real a) => a -> String -> String
-test6 x1 str = show $ f1(x1)
+#define f2(a,b) a+b*(a+b*a)+a*b
 
-test7 :: Semigroup a => a -> a
-test7 x1 = x1+x1+x1+x1+x1
+noherbie1 :: String -> String
+noherbie1 x = x++"hello world"
 
-test8 :: Float -> Float
-test8 x1 = case x1 of
-    1.0 -> f1(x1)
-    2.0 -> x1
+noherbie2 :: Rational -> Rational -> Rational
+noherbie2 a b = f2(a,b)
+
+noherbie3 :: Int -> Int -> Int
+noherbie3 a b = f2(a,b)
+
+noherbie4 :: x -> Int -> Int -> Int
+noherbie4 x a b = f2(a,b)
 
 --------------------------------------------------------------------------------
 
