@@ -1,6 +1,7 @@
 module Stabalize.MathExpr
     where
 
+import Data.List
 import Data.Maybe
 
 import Debug.Trace
@@ -49,6 +50,31 @@ herbieOpsToHaskellOps = go
 
         go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
         go x = x
+
+lisp2vars :: String -> [String]
+lisp2vars = nub . lisp2varsNoNub
+
+lisp2varsNoNub :: String -> [String]
+lisp2varsNoNub lisp
+    = sort
+    $ filter (\x -> x/="("
+                 && x/=")"
+                 && not (x `elem` binOpList)
+                 && not (x `elem` monOpList)
+                 && not (head x `elem` ("1234567890"::String))
+             )
+    $ tokenize lisp :: [String]
+    where
+        -- We just need to add spaces around the parens before calling "words"
+        tokenize :: String -> [String]
+        tokenize = words . concat . map go
+            where
+                go '(' = " ( "
+                go ')' = " ) "
+                go x   = [x]
+
+lispHasRepeatVars :: String -> Bool
+lispHasRepeatVars lisp = length (lisp2vars lisp) /= length (lisp2varsNoNub lisp)
 
 -- | Stores the AST for a math expression in a generic form that requires no knowledge of Core syntax.
 data MathExpr

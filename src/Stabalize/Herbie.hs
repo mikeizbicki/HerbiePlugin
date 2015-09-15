@@ -68,18 +68,8 @@ stabilizeLisp dbgInfo cmdin = do
 execHerbie :: String -> IO (StabilizerResult String)
 execHerbie lisp = do
 
-    -- extract the names of all the variables in the expression
-    let vars = nub
-             $ sort
-             $ filter (\x -> x/="("
-                          && x/=")"
-                          && not (x `elem` binOpList)
-                          && not (x `elem` monOpList)
-                          && not (head x `elem` ("1234567890"::String))
-                      ) $ tokenize lisp :: [String]
-
     -- build the command string we will pass to Herbie
-    let varstr = "("++(intercalate " " vars)++")"
+    let varstr = "("++(intercalate " " $ lisp2vars lisp)++")"
         stdin = "(herbie-test "++varstr++" \"cmd\" "++lisp++") \n"
 
     -- launch Herbie with a fixed seed to ensure reproducible builds
@@ -126,15 +116,6 @@ execHerbie lisp = do
                 , cmdout = lisp
                 }
         Right x -> return x
-
-    where
-        -- We just need to add spaces around the parens before calling "words"
-        tokenize :: String -> [String]
-        tokenize = words . concat . map go
-            where
-                go '(' = " ( "
-                go ')' = " ) "
-                go x   = [x]
 
 -- | The result of running Herbie
 data StabilizerResult a = StabilizerResult

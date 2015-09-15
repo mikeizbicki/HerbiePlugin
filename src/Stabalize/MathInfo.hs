@@ -242,7 +242,7 @@ varTypeIfValidExpr e = case e of
 mkMathInfo :: DynFlags -> [Var] -> Type -> Expr Var -> Maybe MathInfo
 mkMathInfo dflags dicts bndType e = case varTypeIfValidExpr e of
         Nothing -> Nothing
-        Just t -> if mathExprDepth hexpr>1
+        Just t -> if mathExprDepth hexpr>1 && lispHasRepeatVars (mathExpr2lisp hexpr)
             then Just $ MathInfo hexpr (pt { getParam = t}) exprs
             else Nothing
 
@@ -475,7 +475,7 @@ getDictionary guts dictTy = do
 -- and a list of expressions that contain evidence for predicates,
 -- construct an expression that contains evidence for the given predicate.
 getPredEvidence :: ModGuts -> PredType -> [CoreExpr] -> ExceptT String CoreM CoreExpr
-getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) | x <- evidenceExprs ]
+getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
     where
 
         go :: [(CoreExpr,Type)] -> ExceptT String CoreM CoreExpr
@@ -602,7 +602,8 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
 castToType :: [CoreExpr] -> Type -> CoreExpr -> ExceptT String CoreM CoreExpr
 castToType xs castTy inputExpr = if exprType inputExpr == castTy
     then return inputExpr
-    else go [ (x, extractBaseTy $ exprType x) | x <- xs ]
+    else go $ prepEvidence xs
+--     else go $ catMaybes [ (x, extractBaseTy $ exprType x) | x <- xs ]
     where
 
 
@@ -726,22 +727,33 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
 
                 go $ ret++exprs
 
--- Extracts the type that each of our pieces of evidence is applied to
-extractBaseTy :: Type -> Type
-extractBaseTy t = case classifyPredType t of
+prepEvidence :: [CoreExpr] -> [(CoreExpr,Type)]
+prepEvidence exprs = catMaybes
+    [ case extractBaseTy $ exprType x of
+        Just t -> Just (x,t)
+        Nothing -> Nothing --(x, extractBaseTy $ exprType x)
+    | x <- exprs
+    ]
 
-    ClassPred _ [x] -> x
-    ClassPred _ _   -> error $ "FIXME: extractBaseTy.ClassPred: only works on univariate classes"
+    where
+        -- Extracts the type that each of our pieces of evidence is applied to
+        extractBaseTy :: Type -> Maybe Type
+        extractBaseTy t = case classifyPredType t of
 
-    EqPred rel t1 t2 -> if
-        | t1 == boolTy -> t2
-        | t2 == boolTy -> t1
-        | otherwise -> error $ "FIXME: extractBaseTy.EqPred: "
-            ++"rel="++dbg rel
-            ++"; t1="++dbg t1
-            ++"; t2="++dbg t2
---
+            ClassPred _ [x] -> Just x
 
+        --     ClassPred _ _   -> error $ "FIXME: extractBaseTy.ClassPred: only works on univariate classes"
+            EqPred rel t1 t2 -> if
+                | t1 == boolTy -> Just t2
+                | t2 == boolTy -> Just t1
+                | otherwise -> Nothing
+
+        --         | otherwise -> error $ "FIXME: extractBaseTy.EqPred: "
+        --             ++"rel="++dbg rel
+        --             ++"; t1="++dbg t1
+        --             ++"; t2="++dbg t2
+
+            _ -> Nothing
 
 -- | Return all the TyVars that occur anywhere in the Type
 extractTyVars :: Type -> [TyVar]

@@ -65,6 +65,28 @@ noherbie4 x a b = f2(a,b)
 
 --------------------------------------------------------------------------------
 
+-- Herbie shouldn't process these because the expression size is too small.
+-- We're unlikely to get any benefit, and it might take a long time.
+
+toosmall1 :: Float -> Float
+toosmall1 a = a+a
+
+toosmall2 :: Float -> Float -> Float -> Float
+toosmall2 a b c = a+b*c
+
+-- These are big enough and should get processed
+
+bigenough1 :: Float -> Float
+bigenough1 a = a+a*a
+
+bigenough2 :: Float -> Float -> Float -> Float
+bigenough2 a b c = a+b*(c+a)
+
+bigenough3 :: Float -> Float -> Float -> Float
+bigenough3 a b c = f1(c)
+
+--------------------------------------------------------------------------------
+
 {-
 example1 :: Float -> Float -> Float
 example1 x1 x2 = sqrt (x1*x1 + x2*x2)
