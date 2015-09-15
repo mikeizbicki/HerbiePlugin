@@ -538,6 +538,8 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                 -- We've found a class dictionary.
                 -- Recurse into each field (selId) of the dictionary.
                 -- Some (but not all) of these may be more dictionaries.
+                --
+                -- FIXME: Multiparamter classes broken
                 ClassPred c' [ct] -> trace ("getPredEvidence.go.CP: pred="++dbg pred
                                         ++"; origType="++dbg (baseTy)
                                         ++"; exprType="++dbg (exprType expr)
@@ -549,6 +551,8 @@ getPredEvidence guts pred evidenceExprs = go [ (x, extractBaseTy $ exprType x) |
                       )
                     | selId <- classAllSelIds c'
                     ]
+
+                ClassPred _ _ -> go exprs
 
                 -- We've found a tuple of evidence.
                 -- For each field of the tuple we extract it with a case statement, then recurse.
@@ -688,6 +692,8 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                   )
                 | selId <- classAllSelIds c'
                 ]
+
+            ClassPred _ _ -> go exprs
 
             TuplePred preds -> do
                 uniqs <- getUniquesM
