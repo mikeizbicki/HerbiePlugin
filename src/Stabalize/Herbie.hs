@@ -13,7 +13,7 @@ import Database.SQLite.Simple
 import Database.SQLite.Simple.FromRow
 import Database.SQLite.Simple.FromField
 import Database.SQLite.Simple.ToField
-import GHC.Generics
+import GHC.Generics hiding (modName)
 import System.Directory
 import System.Process
 
@@ -22,26 +22,11 @@ import Stabalize.MathExpr
 
 import Prelude
 
--- | The result of running Herbie
-data StabilizerResult a = StabilizerResult
-    { cmdin  :: !a
-    , cmdout :: !a
-    , errin  :: !Double
-    , errout :: !Double
-    }
-    deriving (Show,Generic,NFData)
-
-instance FromField a => FromRow (StabilizerResult a) where
-    fromRow = StabilizerResult <$> field <*> field <*> field <*> field
-
-instance ToField a => ToRow (StabilizerResult a) where
-    toRow (StabilizerResult cmdin cmdout errin errout) = toRow (cmdin, cmdout, errin, errout)
-
 -- | Given a MathExpr, return a numerically stable version.
-stabilizeMathExpr :: MathExpr -> IO (StabilizerResult MathExpr)
-stabilizeMathExpr cmdin = do
+stabilizeMathExpr :: DbgInfo -> MathExpr -> IO (StabilizerResult MathExpr)
+stabilizeMathExpr dbgInfo cmdin = do
     let (cmdinLisp,varmap) = getCanonicalLispCmd cmdin
-    res <- stabilizeLisp cmdinLisp
+    res <- stabilizeLisp dbgInfo cmdinLisp
     let res' = res
             { cmdin  = cmdin
             , cmdout = herbieOpsToHaskellOps $ fromCanonicalLispCmd (cmdout res,varmap)
@@ -54,8 +39,8 @@ stabilizeMathExpr cmdin = do
 -- | Given a Lisp command, return a numerically stable version.
 -- It first checks if the command is in the global database;
 -- if it's not, then it runs "execHerbie".
-stabilizeLisp :: String -> IO (StabilizerResult String)
-stabilizeLisp cmdin = do
+stabilizeLisp :: DbgInfo -> String -> IO (StabilizerResult String)
+stabilizeLisp dbgInfo cmdin = do
     dbResult <- lookupDatabase cmdin
     ret <- case dbResult of
         Just x -> do
@@ -65,6 +50,7 @@ stabilizeLisp cmdin = do
             res <- execHerbie cmdin
             insertDatabase res
             return res
+    insertDatabaseDbgInfo dbgInfo ret
     return ret
 --     if not $ "(if " `isInfixOf` cmdout ret
 --         then return ret
@@ -150,6 +136,21 @@ execHerbie lisp = do
                 go ')' = " ) "
                 go x   = [x]
 
+-- | The result of running Herbie
+data StabilizerResult a = StabilizerResult
+    { cmdin  :: !a
+    , cmdout :: !a
+    , errin  :: !Double
+    , errout :: !Double
+    }
+    deriving (Show,Generic,NFData)
+
+instance FromField a => FromRow (StabilizerResult a) where
+    fromRow = StabilizerResult <$> field <*> field <*> field <*> field
+
+instance ToField a => ToRow (StabilizerResult a) where
+    toRow (StabilizerResult cmdin cmdout errin errout) = toRow (cmdin, cmdout, errin, errout)
+
 -- | Check the database to see if we already know the answer for running Herbie
 lookupDatabase :: String -> IO (Maybe (StabilizerResult String))
 lookupDatabase cmdin = do
@@ -192,5 +193,41 @@ insertDatabase res = do
         close conn
     case ret of
         Left (SomeException e) -> putStrLn $ "WARNING in insertDatabase: "++show e
+        Right _ -> return ()
+    return ()
+
+
+-- | This information gets stored in a separate db table for debugging purposes
+data DbgInfo = DbgInfo
+    { dbgComments   :: String
+    , modName       :: String
+    , functionName  :: String
+    , functionType  :: String
+    }
+
+insertDatabaseDbgInfo :: DbgInfo -> StabilizerResult String -> IO ()
+insertDatabaseDbgInfo dbgInfo res = do
+    ret <- try $ do
+        dirname <- getAppUserDataDirectory "Stabalizer"
+        createDirectoryIfMissing True dirname
+        conn <- open $ dirname++"/Stabalizer.db"
+        execute_ conn $ fromString $
+            "CREATE TABLE IF NOT EXISTS DbgInfo "
+            ++"( id INTEGER PRIMARY KEY"
+            ++", resid INTEGER NOT NULL"
+            ++", dbgComments TEXT"
+            ++", modName TEXT"
+            ++", functionName TEXT"
+            ++", functionType TEXT"
+            ++")"
+        res <- queryNamed
+            conn
+            "SELECT id,cmdout from StabilizerResults where cmdin = :cmdin"
+            [":cmdin" := (cmdin res)]
+            :: IO [(Int,String)]
+        execute conn "INSERT INTO DbgInfo (resid,dbgComments,modName,functionName,functionType) VALUES (?,?,?,?,?)" (fst $ head res,dbgComments dbgInfo,modName dbgInfo,functionName dbgInfo,functionType dbgInfo)
+        close conn
+    case ret of
+        Left (SomeException e) -> putStrLn $ "WARNING in insertDatabaseDbgInfo: "++show e
         Right _ -> return ()
     return ()

@@ -28,7 +28,7 @@ monOpList =
     ]
 
 binOpList = [ "/", "-" ] ++ commutativeOpList
-commutativeOpList = [ "*", "+", "max", "min" ]
+commutativeOpList = [ "*", "+"] -- , "max", "min" ]
 
 herbieOpsToHaskellOps :: MathExpr -> MathExpr
 herbieOpsToHaskellOps = go

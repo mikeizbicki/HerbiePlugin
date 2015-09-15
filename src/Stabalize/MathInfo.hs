@@ -108,7 +108,7 @@ extractParam :: Type -> Maybe Type
 extractParam t = case splitTyConApp_maybe t of
     Nothing -> Nothing
     Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
-        then Nothing
+        then Just t -- Nothing
         else Just (head xs)
 
 
@@ -210,21 +210,36 @@ pprMathInfo mathInfo = go 1 False $ hexpr mathInfo
 
 ----------------------------------------
 
+-- | Returns True only if it makes sense to stabilize expressions of this type.
+-- It makes sense to stabilize all polymorphic types and only IEEE based concrete types.
+--
+-- FIXME: We're ignoring potentially important concrete types like `Complex`.
+validType :: Type -> Bool
+validType t = case splitForAllTy_maybe t of
+    Just _ -> True
+    Nothing -> case tyConAppTyCon_maybe t of
+        Just tyCon -> tyCon==floatTyCon || tyCon==doubleTyCon
+        Nothing -> False
+
 mkMathInfo :: DynFlags -> [Var] -> Type -> Expr Var -> Maybe MathInfo
-mkMathInfo dflags dicts bndType e = case validType of
-    Nothing -> Nothing
-    Just t -> if mathExprDepth hexpr>1
-        then Just $ MathInfo hexpr (pt { getParam = t}) exprs
-        else Nothing
+mkMathInfo dflags dicts bndType e = if not (validType $ exprType e)
+    then Nothing
+    else case validExpr of
+        Nothing -> Nothing
+        Just t -> if mathExprDepth hexpr>1
+            then Just $ MathInfo hexpr (pt { getParam = t}) exprs
+            else Nothing
     where
         (hexpr,exprs) = go e []
 
-        -- this should never return Nothing if validType is not Nothing
-        Just pt = mkParamType dicts bndType
+        -- this should never return Nothing if validExpr is not Nothing
+        pt = case mkParamType dicts bndType of
+            Just pt -> pt
+            Nothing -> error $ "mkMathInfo: "++dbg validExpr
 
         -- We only return a MathInfo if the input is a math expression.
         -- We look at the first function call to determine if it is a math expression or not.
-        validType = case e of
+        validExpr = case e of
             -- first function is binary
             (App (App (App (App (Var v) (Type t)) _) _) _) -> if var2str v `elem` binOpList
                 then Just t
@@ -362,14 +377,15 @@ mathInfo2expr guts herbie = go (hexpr herbie)
 -- core manipulation
 
 -- | Converts a string into a Core variable
-getVar :: ModGuts -> String -> CoreM Var
+getVar :: ModGuts -> String -> ExceptT String CoreM Var
 getVar guts opstr = do
     let opname = getName guts opstr
-    hscenv <- getHscEnv
+    hscenv <- lift getHscEnv
     dflags <- getDynFlags
     eps <- liftIO $ hscEPS hscenv
-    let optype = case lookupNameEnv (eps_PTE eps) opname of
-            Just (AnId i) -> varType i
+    optype <- case lookupNameEnv (eps_PTE eps) opname of
+            Just (AnId i) -> return $ varType i
+            _ -> throwError $ "  WARNING: variable \""++opstr++"\" not in scope"
     return $ mkGlobalVar VanillaId opname optype vanillaIdInfo
 
     where
@@ -385,7 +401,7 @@ getVar guts opstr = do
 -- | Like "decorateFunction", but first finds the function variable given a string.
 getDecoratedFunction :: ModGuts -> String -> Type -> [Var] -> ExceptT String CoreM CoreExpr
 getDecoratedFunction guts str t preds = do
-    f <- lift $ getVar guts str
+    f <- getVar guts str
     decorateFunction guts f t preds
 
 -- | Given a variable that contains a function,

@@ -38,18 +38,18 @@ install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 install opts todo = do
     putMsgS "Compiling with Herbie floating point stabilization"
     reinitializeGlobals
-    return (CoreDoPluginPass "MathInfo" pass : todo)
+    return (CoreDoPluginPass "MathInfo" (pass opts) : todo)
 
-pass :: ModGuts -> CoreM ModGuts
-pass guts = do
+pass :: [CommandLineOption] -> ModGuts -> CoreM ModGuts
+pass opts guts = do
     dflags <- getDynFlags
     liftIO $ writeIORef dynFlags_ref dflags
-    bindsOnlyPass (mapM (modBind guts)) guts
+    bindsOnlyPass (mapM (modBind opts guts)) guts
 
 -- | This function gets run on each binding on the Haskell source file.
-modBind :: ModGuts -> CoreBind -> CoreM CoreBind
-modBind guts bndr@(Rec _) = return bndr
-modBind guts bndr@(NonRec b e) = do
+modBind :: [CommandLineOption] -> ModGuts -> CoreBind -> CoreM CoreBind
+modBind opts guts bndr@(Rec _) = return bndr
+modBind opts guts bndr@(NonRec b e) = do
 --     dflags <- getDynFlags
 --     putMsgS ""
 --     putMsgS $ showSDoc dflags (ppr b)
@@ -145,7 +145,13 @@ modBind guts bndr@(NonRec b e) = do
                         ++ " :: "
                         ++ showSDoc dflags (ppr $ varType b)
                     putMsgS $ "  original expression = "++pprMathInfo mathInfo
-                    res <- liftIO $ stabilizeMathExpr $ hexpr mathInfo
+                    let dbgInfo = DbgInfo
+                            { dbgComments  = concat opts
+                            , modName      = showSDoc dflags (ppr $ moduleName $ mg_module guts)
+                            , functionName = showSDoc dflags (ppr b)
+                            , functionType = showSDoc dflags (ppr $ varType b)
+                            }
+                    res <- liftIO $ stabilizeMathExpr dbgInfo $ hexpr mathInfo
                     let mathInfo' = mathInfo { hexpr = cmdout res }
                     putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
                     putMsgS $ "  original error = "++show (errin res)++" bits"
