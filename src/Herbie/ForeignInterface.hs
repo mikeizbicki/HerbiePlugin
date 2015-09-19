@@ -1,6 +1,6 @@
-{-# LANGUAGE OverloadedStrings,ScopedTypeVariables,DeriveGeneric,DeriveAnyClass #-}
+{-# LANGUAGE OverloadedStrings #-}
 
-module Stabalize.Herbie
+module Herbie.ForeignInterface
     where
 
 import Control.Applicative
@@ -16,9 +16,10 @@ import Database.SQLite.Simple.ToField
 import GHC.Generics hiding (modName)
 import System.Directory
 import System.Process
+import System.Timeout
 
-import Stabalize.MathInfo
-import Stabalize.MathExpr
+import Herbie.MathInfo
+import Herbie.MathExpr
 
 import Prelude
 
@@ -27,12 +28,23 @@ stabilizeMathExpr :: DbgInfo -> MathExpr -> IO (StabilizerResult MathExpr)
 stabilizeMathExpr dbgInfo cmdin = do
     let (cmdinLisp,varmap) = getCanonicalLispCmd cmdin
     res <- stabilizeLisp dbgInfo cmdinLisp
+    cmdout <- do
+        -- FIXME:
+        -- Due to a bug in Herbie, fromCanonicalLispCmd sometimes throws an exception.
+        ret <- try $ do
+            let ret = herbieOpsToHaskellOps $ fromCanonicalLispCmd (cmdout res,varmap)
+            deepseq ret $ return ret
+        case ret of
+            Left (SomeException e) -> do
+                putStrLn $ "WARNING in stabilizeMathExpr: "++show e
+                return cmdin
+            Right x -> return x
     let res' = res
             { cmdin  = cmdin
-            , cmdout = herbieOpsToHaskellOps $ fromCanonicalLispCmd (cmdout res,varmap)
+            , cmdout = cmdout
             }
---     putStrLn $ "stabilizeLisp:  "++cmdout res
---     putStrLn $ "stabilizeLisp:  "++mathExpr2lisp (cmdout res')
+--     putStrLn $ "cmdin:   "++cmdinLisp
+--     putStrLn $ "cmdout:  "++cmdout res
 --     putStrLn $ "stabilizeLisp': "++mathExpr2lisp (fromCanonicalLispCmd (cmdout res,varmap))
     return res'
 
@@ -52,17 +64,6 @@ stabilizeLisp dbgInfo cmdin = do
             return res
     insertDatabaseDbgInfo dbgInfo ret
     return ret
---     if not $ "(if " `isInfixOf` cmdout ret
---         then return ret
---         else do
---             putStrLn "WARNING: Herbie's output contains if statements, which aren't yet supported"
---             putStrLn "WARNING: Using original numerically unstable equation."
---             return $ ret
---                 { errout = errin ret
---                 , cmdout = cmdin
---                 }
---     return $ ret { cmdout = "(+ herbie0 herbie1)" }
---     return $ ret { cmdout = "(if (> herbie0 herbie1) herbie0 herbie1)" }
 
 -- | Run the `herbie` command and return the result
 execHerbie :: String -> IO (StabilizerResult String)
@@ -72,50 +73,69 @@ execHerbie lisp = do
     let varstr = "("++(intercalate " " $ lisp2vars lisp)++")"
         stdin = "(herbie-test "++varstr++" \"cmd\" "++lisp++") \n"
 
-    -- launch Herbie with a fixed seed to ensure reproducible builds
-    (_,stdout,stderr) <- readProcessWithExitCode
-        "herbie-exec"
-        [ "-r", "#(1461197085 2376054483 1553562171 1611329376 2497620867 2308122621)" ]
-        stdin
+    -- Herbie can take a long time to run.
+    -- Here we limit it to 2 minutes.
+    --
+    -- FIXME:
+    -- This should be a parameter the user can pass to the plugin
+    ret <- timeout 120000000 $ do
 
-    -- try to parse Herbie's output;
-    -- if we can't parse it, that means Herbie had an error and we should abort gracefully
-    ret <- try $ do
-        let (line1:line2:line3:_) = lines stdout
-        let ret = StabilizerResult
-                { errin
-                    = read
-                    $ drop 1
-                    $ dropWhile (/=':')
-                    $ line1
-                , errout
-                    = read
-                    $ drop 1
-                    $ dropWhile (/=':')
-                    $ line2
-                , cmdin
-                    = lisp
-                , cmdout
-                    = (!!2)
-                    $ groupByParens
-                    $ init
-                    $ tail
-                    $ line3
-                }
-        deepseq ret $ return ret
+        -- launch Herbie with a fixed seed to ensure reproducible builds
+        (_,stdout,stderr) <- readProcessWithExitCode
+            "herbie-exec"
+            [ "-r", "#(1461197085 2376054483 1553562171 1611329376 2497620867 2308122621)" ]
+            stdin
+
+        -- try to parse Herbie's output;
+        -- if we can't parse it, that means Herbie had an error and we should abort gracefully
+        ret <- try $ do
+            let (line1:line2:line3:_) = lines stdout
+            let ret = StabilizerResult
+                    { errin
+                        = read
+                        $ drop 1
+                        $ dropWhile (/=':')
+                        $ line1
+                    , errout
+                        = read
+                        $ drop 1
+                        $ dropWhile (/=':')
+                        $ line2
+                    , cmdin
+                        = lisp
+                    , cmdout
+                        = (!!2)
+                        $ groupByParens
+                        $ init
+                        $ tail
+                        $ line3
+                    }
+            deepseq ret $ return ret
+
+        case ret of
+            Left (SomeException e) -> do
+                putStrLn $ "WARNING in execHerbie: "++show e
+                putStrLn $ "WARNING in execHerbie: stdin="++stdin
+                putStrLn $ "WARNING in execHerbie: stdout="++stdout
+                return $ StabilizerResult
+                    { errin  = 0/0
+                    , errout = 0/0
+                    , cmdin  = lisp
+                    , cmdout = lisp
+                    }
+            Right x -> return x
 
     case ret of
-        Left (SomeException e) -> do
-            putStrLn $ "WARNING in execHerbie: "++show e
-            putStrLn $ "WARNING in execHerbie: stdin="++stdin
-            putStrLn $ "WARNING in execHerbie: stdout="++stdout
+        Just x -> return x
+        Nothing -> do
+            putStrLn $ "WARNING: Call to Herbie timed out after 2 minutes."
             return $ StabilizerResult
                 { errin  = 0/0
                 , errout = 0/0
                 , cmdin  = lisp
                 , cmdout = lisp
                 }
-        Right x -> return x
+
 
 -- | The result of running Herbie
 data StabilizerResult a = StabilizerResult
@@ -133,6 +153,13 @@ instance ToField a => ToRow (StabilizerResult a) where
     toRow (StabilizerResult cmdin cmdout errin errout) = toRow (cmdin, cmdout, errin, errout)
 
 -- | Check the database to see if we already know the answer for running Herbie
+--
+-- FIXME:
+-- When Herbie times out, NULL gets inserted into the database for errin and errout.
+-- The Sqlite3 bindings don't support putting NULL into Double's as NaNs,
+-- so the query below raises an exception.
+-- This isn't so bad, except a nasty error message gets printed,
+-- and the plugin attempts to run Herbie again (wasting a lot of time).
 lookupDatabase :: String -> IO (Maybe (StabilizerResult String))
 lookupDatabase cmdin = do
     ret <- try $ do
@@ -166,8 +193,8 @@ insertDatabase res = do
             ++"( id INTEGER PRIMARY KEY"
             ++", cmdin  TEXT UNIQUE NOT NULL"
             ++", cmdout TEXT        NOT NULL"
-            ++", errin  DOUBLE      NOT NULL"
-            ++", errout DOUBLE      NOT NULL"
+            ++", errin  DOUBLE      "
+            ++", errout DOUBLE      "
             ++")"
         execute_ conn "CREATE INDEX IF NOT EXISTS StabilizerResultsIndex ON StabilizerResults(cmdin)"
         execute conn "INSERT INTO StabilizerResults (cmdin,cmdout,errin,errout) VALUES (?,?,?,?)" res

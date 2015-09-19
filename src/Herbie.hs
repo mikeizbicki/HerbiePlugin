@@ -19,11 +19,11 @@ import Control.Monad
 import Control.Monad.Except
 import Data.Maybe
 
-import Debug.Trace
+import Herbie.ForeignInterface
+import Herbie.MathExpr
+import Herbie.MathInfo
 
-import Stabalize.Herbie
-import Stabalize.MathExpr
-import Stabalize.MathInfo
+import Debug.Trace
 
 import Prelude
 import Show

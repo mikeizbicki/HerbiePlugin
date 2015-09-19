@@ -1,8 +1,11 @@
-module Stabalize.MathExpr
+{-# LANGUAGE DeriveAnyClass,DeriveGeneric #-}
+module Herbie.MathExpr
     where
 
+import Control.DeepSeq
 import Data.List
 import Data.Maybe
+import GHC.Generics
 
 import Debug.Trace
 import Prelude
@@ -83,7 +86,7 @@ data MathExpr
     | EIf MathExpr MathExpr MathExpr
     | ELit Rational
     | ELeaf String
-    deriving (Show,Eq)
+    deriving (Show,Eq,Generic,NFData)
 
 mathExprDepth :: MathExpr -> Int
 mathExprDepth (EBinOp _ e1 e2) = 1+max (mathExprDepth e1) (mathExprDepth e2)
@@ -148,6 +151,10 @@ canonicalizeMathExpr e = go [] e
                     Just x -> (acc,x)
 
 -- | Convert a canonical MathExpr into its original form.
+--
+-- FIXME:
+-- A bug in Herbie causes it to sometimes output infinities,
+-- which break this function and cause it to error.
 unCanonicalizeMathExpr :: (MathExpr,[(String,String)]) -> MathExpr
 unCanonicalizeMathExpr (e,xs) = go e
     where
@@ -155,6 +162,7 @@ unCanonicalizeMathExpr (e,xs) = go e
 
         go (EMonOp op e1) = EMonOp op (go e1)
         go (EBinOp op e1 e2) = EBinOp op (go e1) (go e2)
+        go (EIf (EBinOp "<" _ (ELeaf "-inf.0")) e1 e2) = go e2 -- FIXME: added due to bug above
         go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
         go (ELit r) = ELit r
         go (ELeaf str) = case lookup str xs' of
@@ -173,6 +181,7 @@ mathExpr2lisp = go
 
 -- | Converts a lisp command into a MathExpr
 str2mathExpr :: String -> MathExpr
+str2mathExpr ('-':xs) = EMonOp "negate" (str2mathExpr xs)
 str2mathExpr ('(':xs) = if length xs > 1 && last xs==')'
     then case groupByParens $ init xs of
         [op,e1]             -> EMonOp op (str2mathExpr e1)

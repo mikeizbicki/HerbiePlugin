@@ -56,13 +56,18 @@ library
 
   -- Modules included in this library but not exported.
   other-modules:
-    Stabalize.Herbie
-    Stabalize.MathExpr
-    Stabalize.MathInfo
+    Herbie.CoreManip
+    Herbie.ForeignInterface
+    Herbie.MathExpr
+    Herbie.MathInfo
     Show
 
   -- LANGUAGE extensions used by modules in this package.
-  -- other-extensions:
+  extensions:
+    MultiWayIf
+    ScopedTypeVariables
+    DeriveGeneric
+    DeriveAnyClass
 
   -- Other library packages from which modules are imported.
   build-depends:        base >=4.8 && <4.9
@@ -73,6 +78,7 @@ library
                       , text
                       , directory
                       , deepseq
+                      , mtl
 
   -- Directories containing source files.
   hs-source-dirs:      src
