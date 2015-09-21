@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 -- The name of the package.
-name:                herbie-haskell
+name:                HerbiePlugin
 
 -- The package version.  See the Haskell package versioning policy (PVP)
 -- for standards guiding when and how versions should be incremented.
@@ -86,3 +86,16 @@ library
   -- Base language which the package is written in.
   default-language:    Haskell2010
 
+Test-Suite Tests
+    default-language:   Haskell2010
+    type:               exitcode-stdio-1.0
+    hs-source-dirs:     test
+    main-is:            Tests.hs
+
+    ghc-options:
+        -fplugin=Herbie
+        -dcore-lint
+
+    build-depends:
+        subhask,
+        HerbiePlugin
