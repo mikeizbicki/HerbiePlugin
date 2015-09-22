@@ -61,11 +61,11 @@ getVar guts opstr = do
     where
         getName :: ModGuts -> String -> Name
         getName guts str = case filter isCorrectVar (concat $ occEnvElts (mg_rdr_env guts)) of
-            xs -> if length xs>0
-                then gre_name $ head $ xs
+            xs -> if not (null xs)
+                then gre_name $ head xs
                 else error $ "getName: '"++str++"'"
             where
-                isCorrectVar x = (getString $ gre_name x) == str
+                isCorrectVar x = getString (gre_name x) == str
                               && (str == "abs" || case gre_par x of NoParent -> False; _ -> True)
 
 -- | Like "decorateFunction", but first finds the function variable given a string.
@@ -100,13 +100,13 @@ getDictionary :: ModGuts -> Type -> ExceptT String CoreM CoreExpr
 getDictionary guts dictTy = do
     let dictVar = mkGlobalVar
             VanillaId
-            (mkSystemName (mkUnique 'z' 1337) (mkVarOcc $ "magicDictionaryName"))
+            (mkSystemName (mkUnique 'z' 1337) (mkVarOcc "magicDictionaryName"))
             dictTy
             vanillaIdInfo
 
     bnds <- lift $ runTcM guts $ do
         loc <- getCtLoc $ GivenOrigin UnkSkol
-        let nonC = mkNonCanonical $ CtWanted
+        let nonC = mkNonCanonical CtWanted
                 { ctev_pred = varType dictVar
                 , ctev_evar = dictVar
                 , ctev_loc = loc
@@ -163,7 +163,7 @@ getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
                 IrredPred _ -> go exprs
 
                 EqPred _ t1 t2 -> trace ("getPredEvidence.go.EP: pred="++dbg pred
-                    ++"; origType="++dbg (baseTy)
+                    ++"; origType="++dbg baseTy
                     ++"; exprType="++dbg (exprType expr)
                     ) $ case splitAppTy_maybe pred of
                         Nothing -> trace " A" $ go exprs
@@ -183,7 +183,7 @@ getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
                 --
                 -- FIXME: Multiparamter classes broken
                 ClassPred c' [ct] -> trace ("getPredEvidence.go.CP: pred="++dbg pred
-                                        ++"; origType="++dbg (baseTy)
+                                        ++"; origType="++dbg baseTy
                                         ++"; exprType="++dbg (exprType expr)
                                         ) $
                   go $
@@ -200,7 +200,7 @@ getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
                 -- For each field of the tuple we extract it with a case statement, then recurse.
                 TuplePred preds -> do
                     trace ("getPredEvidence.go.TP: pred="++dbg pred
-                                        ++"; origType="++dbg (baseTy)
+                                        ++"; origType="++dbg baseTy
                                         ++"; exprType="++dbg (exprType expr)
                                         ) $ return ()
 
@@ -218,7 +218,7 @@ getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
                             ]
 
                     uniq <- getUniqueM
-                    let wildName = mkSystemName uniq (mkVarOcc $ "wild")
+                    let wildName = mkSystemName uniq (mkVarOcc "wild")
                         wildVar = mkLocalVar VanillaId wildName (exprType expr) vanillaIdInfo
 
                     let ret =
@@ -260,7 +260,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
             IrredPred _ -> go exprs
 
             EqPred _ t1 t2 -> trace ("castToType.go.EP: castTy="++dbg castTy
-              ++"; origType="++dbg (baseTy)
+              ++"; origType="++dbg baseTy
               ++"; exprType="++dbg (exprType expr)
               ) $ goEqPred [] castTy (exprType inputExpr)
                 where
@@ -293,7 +293,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                             mkCast :: Bool -> ExceptT String CoreM CoreExpr
                             mkCast isFlipped = do
                                 coboxUniq <- getUniqueM
-                                let coboxName = mkSystemName coboxUniq (mkVarOcc $ "cobox")
+                                let coboxName = mkSystemName coboxUniq (mkVarOcc "cobox")
                                     coboxType = if isFlipped
                                         then mkCoercionType Nominal castTyRHS inputTyRHS
                                         else mkCoercionType Nominal inputTyRHS castTyRHS
@@ -306,7 +306,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                                     mkCoercion (x:xs) = mkTyConAppCo Nominal x [mkCoercion xs]
 
                                 wildUniq <- getUniqueM
-                                let wildName = mkSystemName wildUniq (mkVarOcc $ "wild")
+                                let wildName = mkSystemName wildUniq (mkVarOcc "wild")
                                     wildType = exprType expr
                                     wildVar = mkLocalVar VanillaId wildName wildType vanillaIdInfo
 
@@ -345,7 +345,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                         ]
 
                 uniq <- getUniqueM
-                let wildName = mkSystemName uniq (mkVarOcc $ "wild")
+                let wildName = mkSystemName uniq (mkVarOcc "wild")
                     wildVar = mkLocalVar VanillaId wildName (exprType expr) vanillaIdInfo
 
                 let ret =
@@ -416,7 +416,7 @@ extractQuantifiers t = case splitForAllTy_maybe t of
 extractContext :: Type -> ([Type],Type)
 extractContext t = case splitTyConApp_maybe t of
     Nothing -> ([],t)
-    Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
+    Just (tycon,xs) -> if occNameString (nameOccName $ tyConName tycon) /= "(->)"
                        || not hasCxt
         then ([],t)
         else (head xs:cxt',t')
@@ -433,7 +433,7 @@ extractContext t = case splitTyConApp_maybe t of
 extractParam :: Type -> Maybe Type
 extractParam t = case splitTyConApp_maybe t of
     Nothing -> Nothing
-    Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
+    Just (tycon,xs) -> if occNameString (nameOccName $ tyConName tycon) /= "(->)"
         then Just t -- Nothing
         else Just (head xs)
 
@@ -484,7 +484,7 @@ getString = occNameString . getOccName
 
 expr2str :: DynFlags -> Expr Var -> String
 expr2str dflags (Var v) = {-"var_" ++-} var2str v
-expr2str dflags e       = "expr_" ++ (decorate $ showSDoc dflags (ppr e))
+expr2str dflags e       = "expr_" ++ decorate (showSDoc dflags (ppr e))
     where
         decorate :: String -> String
         decorate = map go

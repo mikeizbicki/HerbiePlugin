@@ -211,9 +211,9 @@ lisp2varsNoNub lisp
     = sort
     $ filter (\x -> x/="("
                  && x/=")"
-                 && not (x `elem` binOpList)
-                 && not (x `elem` monOpList)
-                 && not (head x `elem` ("1234567890"::String))
+                 && (x `notElem` binOpList)
+                 && (x `notElem` monOpList)
+                 && (head x `notElem` ("1234567890"::String))
              )
     $ tokenize lisp :: [String]
     where

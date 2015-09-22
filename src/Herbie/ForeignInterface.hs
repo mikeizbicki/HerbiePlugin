@@ -77,7 +77,7 @@ execHerbie :: String -> IO (StabilizerResult String)
 execHerbie lisp = do
 
     -- build the command string we will pass to Herbie
-    let varstr = "("++(intercalate " " $ lisp2vars lisp)++")"
+    let varstr = "("++unwords (lisp2vars lisp)++")"
         stdin = "(herbie-test "++varstr++" \"cmd\" "++lisp++") \n"
 
     -- Herbie can take a long time to run.
@@ -101,21 +101,18 @@ execHerbie lisp = do
                     { errin
                         = read
                         $ drop 1
-                        $ dropWhile (/=':')
-                        $ line1
+                        $ dropWhile (/=':') line1
                     , errout
                         = read
                         $ drop 1
-                        $ dropWhile (/=':')
-                        $ line2
+                        $ dropWhile (/=':') line2
                     , cmdin
                         = lisp
                     , cmdout
                         = (!!2)
                         $ groupByParens
                         $ init
-                        $ tail
-                        $ line3
+                        $ tail line3
                     }
             deepseq ret $ return ret
 
@@ -124,7 +121,7 @@ execHerbie lisp = do
                 putStrLn $ "WARNING in execHerbie: "++show e
                 putStrLn $ "WARNING in execHerbie: stdin="++stdin
                 putStrLn $ "WARNING in execHerbie: stdout="++stdout
-                return $ StabilizerResult
+                return StabilizerResult
                     { errin  = 0/0
                     , errout = 0/0
                     , cmdin  = lisp
@@ -237,7 +234,7 @@ insertDatabaseDbgInfo dbgInfo res = do
         res <- queryNamed
             conn
             "SELECT id,cmdout from StabilizerResults where cmdin = :cmdin"
-            [":cmdin" := (cmdin res)]
+            [":cmdin" := cmdin res]
             :: IO [(Int,String)]
         execute conn "INSERT INTO DbgInfo (resid,dbgComments,modName,functionName,functionType) VALUES (?,?,?,?,?)" (fst $ head res,dbgComments dbgInfo,modName dbgInfo,functionName dbgInfo,functionType dbgInfo)
         close conn
