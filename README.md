@@ -1,4 +1,4 @@
-# Herbie GHC Plugin
+# Herbie GHC Plugin ![](https://travis-ci.org/mikeizbicki/HerbiePlugin.svg)
 
 The Herbie [GHC Plugin](https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/compiler-plugins.html) automatically improves the [numerical stability](https://en.wikipedia.org/wiki/Numerical_stability) of your Haskell code.
 The Herbie plugin fully supports the [SubHask](http://github.com/mikeizbicki/subhask) numeric prelude,
