@@ -69,7 +69,7 @@ getVar guts opstr = do
                               && (str == "abs" || case gre_par x of NoParent -> False; _ -> True)
 
 -- | Like "decorateFunction", but first finds the function variable given a string.
-getDecoratedFunction :: ModGuts -> String -> Type -> [Var] -> ExceptT String CoreM CoreExpr
+getDecoratedFunction :: ModGuts -> String -> Type -> [CoreExpr] -> ExceptT String CoreM CoreExpr
 getDecoratedFunction guts str t preds = do
     f <- getVar guts str
     decorateFunction guts f t preds
@@ -78,7 +78,7 @@ getDecoratedFunction guts str t preds = do
 -- the type the function is being applied to,
 -- and all in scope predicates,
 -- apply the type and any needed dictionaries to the function.
-decorateFunction :: ModGuts -> Var -> Type -> [Var] -> ExceptT String CoreM CoreExpr
+decorateFunction :: ModGuts -> Var -> Type -> [CoreExpr] -> ExceptT String CoreM CoreExpr
 decorateFunction guts f t preds = do
     let ([v],unquantified) = extractQuantifiers $ varType f
         (cxt,_) = extractContext unquantified
@@ -92,16 +92,7 @@ decorateFunction guts f t preds = do
         getDict pred = do
             catchError
                 (getDictionary guts pred)
-                (\_ -> getPredEvidence guts pred (map Var preds))
-
---             ret <- getDictionary guts pred
---             case ret of
---                 Right x -> return [x]
---                 Left err1 -> do
---                     ret <- getPredEvidence guts pred (map Var preds)
---                     case ret of
---                         Right x -> return [x]
---                         Left err2 -> error $ "getDict: f="++getString f++"; pred="++showSDoc dynFlags (ppr pred)
+                (\_ -> getPredEvidence guts pred preds)
 
 -- | Given a non-polymorphic PredType (e.g. `Num Float`),
 -- return the corresponding dictionary.
@@ -184,26 +175,7 @@ getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
                                 let pred' = mkAppTy tyCon $ if t1==tyApp
                                         then t2
                                         else t1
---                                 catchError
---                                     (getDictionary guts pred')
---                                     (castToType evidenceExprs pred x)
---
                                 getDictionary guts pred' >>= castToType evidenceExprs pred
-
---                                 ret <- getDictionary guts pred'
--- --                                 ret2 <- getPredEvidence guts pred' evidenceExprs
---                                 traceM $ " ret ="++dbg ret
--- --                                 traceM $ " ret2="++dbg ret2
---                                 case ret of
---                                     Left _ ->
---                                         trace (" B: baseTy="++dbg baseTy++"; tyApp="++dbg tyApp) $
---                                         trace (" B: t1="++dbg t1++"; t2="++dbg t2) $
---                                         trace (" C: pred'="++dbg pred') $ go exprs
---                                     Right x -> do
---                                         ret <- castToType evidenceExprs pred x
---                                         case ret of
---                                             Right x -> return x
--- --                                             Nothing -> error ("  Just: tyApp="++dbg tyApp++"; x="++dbg x++"; pred="++dbg pred)
 
                 -- We've found a class dictionary.
                 -- Recurse into each field (selId) of the dictionary.
@@ -298,13 +270,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                     -- As long as the type constructors match,
                     -- we might be able to do a cast at any level of the peeling
                     goEqPred :: [TyCon] -> Type -> Type -> ExceptT String CoreM CoreExpr
-                    goEqPred tyCons castTyRHS inputTyRHS =
---                       trace
---                       (" goEqPred: tyCons="++dbg tyCons
---                       ++"; castTyRHS="++dbg castTyRHS
---                       ++"; inputTyRHS="++dbg inputTyRHS
---                       ) $
-                      if
+                    goEqPred tyCons castTyRHS inputTyRHS = if
                         | t1==castTyRHS && t2==inputTyRHS -> mkCast True
                         | t2==castTyRHS && t1==inputTyRHS -> mkCast False
                         | otherwise -> case ( splitTyConApp_maybe castTyRHS
@@ -396,6 +362,8 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
 
                 go $ ret++exprs
 
+-- | Each element in the input list must contain evidence of a predicate.
+-- The output list contains evidence of a predicate along with a type that will be used for casting.
 prepEvidence :: [CoreExpr] -> [(CoreExpr,Type)]
 prepEvidence exprs = catMaybes
     [ case extractBaseTy $ exprType x of
@@ -411,16 +379,10 @@ prepEvidence exprs = catMaybes
 
             ClassPred _ [x] -> Just x
 
-        --     ClassPred _ _   -> error $ "FIXME: extractBaseTy.ClassPred: only works on univariate classes"
             EqPred rel t1 t2 -> if
                 | t1 == boolTy -> Just t2
                 | t2 == boolTy -> Just t1
                 | otherwise -> Nothing
-
-        --         | otherwise -> error $ "FIXME: extractBaseTy.EqPred: "
-        --             ++"rel="++dbg rel
-        --             ++"; t1="++dbg t1
-        --             ++"; t2="++dbg t2
 
             _ -> Nothing
 
@@ -474,6 +436,22 @@ extractParam t = case splitTyConApp_maybe t of
     Just (tycon,xs) -> if (occNameString $ nameOccName $ tyConName tycon)/="(->)"
         then Just t -- Nothing
         else Just (head xs)
+
+
+-- | Given a type of the form
+--
+-- > A -> ... -> C
+--
+-- returns C
+getReturnType :: Type -> Type
+getReturnType t = case splitForAllTys t of
+    (_,t') -> go t'
+    where
+        go t = case splitTyConApp_maybe t of
+            Just (tycon,[_,t']) -> if getString tycon=="(->)"
+                then go t'
+                else t
+            _ -> t
 
 
 --------------------------------------------------------------------------------

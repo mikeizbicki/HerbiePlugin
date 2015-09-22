@@ -1,5 +1,6 @@
 module Herbie
     ( plugin
+    , pass
     )
     where
 
@@ -152,8 +153,8 @@ modBind opts guts bndr@(NonRec b e) = do
                             , functionName = showSDoc dflags (ppr b)
                             , functionType = showSDoc dflags (ppr $ varType b)
                             }
-                    res <- liftIO $ stabilizeMathExpr dbgInfo $ hexpr mathInfo
-                    let mathInfo' = mathInfo { hexpr = cmdout res }
+                    res <- liftIO $ stabilizeMathExpr dbgInfo $ getMathExpr mathInfo
+                    let mathInfo' = mathInfo { getMathExpr = cmdout res }
                     putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
                     putMsgS $ "  original error = "++show (errin res)++" bits"
                     putMsgS $ "  improved error = "++show (errout res)++" bits"

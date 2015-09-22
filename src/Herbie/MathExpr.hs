@@ -12,8 +12,8 @@ import Prelude
 ifThenElse True t f = t
 ifThenElse False t f = f
 
--- other functions: cot, expt, sqr
--- constants; pi, e
+-------------------------------------------------------------------------------
+-- constants that define valid math expressions
 
 monOpList =
     [ "cos"
@@ -35,71 +35,7 @@ monOpList =
 binOpList = [ "^", "**", "^^", "/", "-", "expt" ] ++ commutativeOpList
 commutativeOpList = [ "*", "+"] -- , "max", "min" ]
 
-haskellToHerbieOps :: MathExpr -> MathExpr
-haskellToHerbieOps = go
-    where
-        go (EBinOp op e1 e2) = EBinOp op' (go e1) (go e2)
-            where
-                op' = case op of
-                    "**"   -> "expt"
-                    "^^"   -> "expt"
-                    "^"    -> "expt"
-                    x      -> x
-
-        go (EMonOp op e1) = EMonOp op' (go e1)
-            where
-                op' = case op of
-                    "size" -> "abs"
-                    x      -> x
-
-        go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
-        go x = x
-
-herbieOpsToHaskellOps :: MathExpr -> MathExpr
-herbieOpsToHaskellOps = go
-    where
-        go (EBinOp op e1 e2) = EBinOp op' (go e1) (go e2)
-            where
-                op' = case op of
-                    "^"    -> "**"
-                    "expt" -> "**"
-                    x      -> x
-
-        go (EMonOp "sqr" e1) = EBinOp "*" (go e1) (go e1)
-        go (EMonOp op e1) = EMonOp op' (go e1)
-            where
-                op' = case op of
-                    "-" -> "negate"
-                    "abs" -> "size"
-                    x   -> x
-
-        go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
-        go x = x
-
-lisp2vars :: String -> [String]
-lisp2vars = nub . lisp2varsNoNub
-
-lisp2varsNoNub :: String -> [String]
-lisp2varsNoNub lisp
-    = sort
-    $ filter (\x -> x/="("
-                 && x/=")"
-                 && not (x `elem` binOpList)
-                 && not (x `elem` monOpList)
-                 && not (head x `elem` ("1234567890"::String))
-             )
-    $ tokenize lisp :: [String]
-    where
-        -- We just need to add spaces around the parens before calling "words"
-        tokenize :: String -> [String]
-        tokenize = words . concat . map go
-            where
-                go '(' = " ( "
-                go ')' = " ) "
-                go x   = [x]
-
-lispHasRepeatVars :: String -> Bool
-lispHasRepeatVars lisp = length (lisp2vars lisp) /= length (lisp2varsNoNub lisp)
+--------------------------------------------------------------------------------
 
 -- | Stores the AST for a math expression in a generic form that requires no knowledge of Core syntax.
 data MathExpr
@@ -109,19 +45,6 @@ data MathExpr
     | ELit Rational
     | ELeaf String
     deriving (Show,Eq,Generic,NFData)
-
-mathExprDepth :: MathExpr -> Int
-mathExprDepth (EBinOp _ e1 e2) = 1+max (mathExprDepth e1) (mathExprDepth e2)
-mathExprDepth (EMonOp _ e1   ) = 1+mathExprDepth e1
-mathExprDepth _ = 0
-
-getCanonicalLispCmd :: MathExpr -> (String,[(String,String)])
-getCanonicalLispCmd me = (mathExpr2lisp me',varmap)
-    where
-        (me',varmap) = canonicalizeMathExpr me
-
-fromCanonicalLispCmd :: (String,[(String,String)]) -> MathExpr
-fromCanonicalLispCmd (lisp,varmap) = unCanonicalizeMathExpr (str2mathExpr lisp,varmap)
 
 instance Ord MathExpr where
     compare (ELeaf _) (ELeaf _) = EQ
@@ -145,12 +68,55 @@ instance Ord MathExpr where
         _ -> EQ
     compare (EBinOp _ _ _) _ = LT
 
+-- | Converts all Haskell operators in the MathExpr into Herbie operators
+haskellOpsToHerbieOps :: MathExpr -> MathExpr
+haskellOpsToHerbieOps = go
+    where
+        go (EBinOp op e1 e2) = EBinOp op' (go e1) (go e2)
+            where
+                op' = case op of
+                    "**"   -> "expt"
+                    "^^"   -> "expt"
+                    "^"    -> "expt"
+                    x      -> x
+
+        go (EMonOp op e1) = EMonOp op' (go e1)
+            where
+                op' = case op of
+                    "size" -> "abs"
+                    x      -> x
+
+        go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
+        go x = x
+
+-- | Converts all Herbie operators in the MathExpr into Haskell operators
+herbieOpsToHaskellOps :: MathExpr -> MathExpr
+herbieOpsToHaskellOps = go
+    where
+        go (EBinOp op e1 e2) = EBinOp op' (go e1) (go e2)
+            where
+                op' = case op of
+                    "^"    -> "**"
+                    "expt" -> "**"
+                    x      -> x
+
+        go (EMonOp "sqr" e1) = EBinOp "*" (go e1) (go e1)
+        go (EMonOp op e1) = EMonOp op' (go e1)
+            where
+                op' = case op of
+                    "-" -> "negate"
+                    "abs" -> "size"
+                    x   -> x
+
+        go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
+        go x = x
+
 -- | Replace all the variables in the MathExpr with canonical names (x0,x1,x2...)
 -- and reorder commutative binary operations.
 -- This lets us more easily compare MathExpr's based on their structure.
 -- The returned map lets us convert the canoncial MathExpr back into the original.
-canonicalizeMathExpr :: MathExpr -> (MathExpr,[(String,String)])
-canonicalizeMathExpr e = go [] e
+toCanonicalMathExpr :: MathExpr -> (MathExpr,[(String,String)])
+toCanonicalMathExpr e = go [] e
     where
         go :: [(String,String)] -> MathExpr -> (MathExpr,[(String,String)])
         go acc (EBinOp op e1 e2) = (EBinOp op e1' e2',acc2')
@@ -177,8 +143,8 @@ canonicalizeMathExpr e = go [] e
 -- FIXME:
 -- A bug in Herbie causes it to sometimes output infinities,
 -- which break this function and cause it to error.
-unCanonicalizeMathExpr :: (MathExpr,[(String,String)]) -> MathExpr
-unCanonicalizeMathExpr (e,xs) = go e
+fromCanonicalMathExpr :: (MathExpr,[(String,String)]) -> MathExpr
+fromCanonicalMathExpr (e,xs) = go e
     where
         xs' = map (\(a,b) -> (b,a)) xs
 
@@ -189,7 +155,24 @@ unCanonicalizeMathExpr (e,xs) = go e
         go (ELit r) = ELit r
         go (ELeaf str) = case lookup str xs' of
             Just x -> ELeaf x
-            Nothing -> error $ "unCanonicalizeMathExpr: str="++str++"; xs="++show xs'
+            Nothing -> error $ "fromCanonicalMathExpr: str="++str++"; xs="++show xs'
+
+-- | Calculates the maximum depth of the AST.
+mathExprDepth :: MathExpr -> Int
+mathExprDepth (EBinOp _ e1 e2) = 1+max (mathExprDepth e1) (mathExprDepth e2)
+mathExprDepth (EMonOp _ e1   ) = 1+mathExprDepth e1
+mathExprDepth _ = 0
+
+--------------------------------------------------------------------------------
+-- functions for manipulating math expressions in lisp form
+
+getCanonicalLispCmd :: MathExpr -> (String,[(String,String)])
+getCanonicalLispCmd me = (mathExpr2lisp me',varmap)
+    where
+        (me',varmap) = toCanonicalMathExpr me
+
+fromCanonicalLispCmd :: (String,[(String,String)]) -> MathExpr
+fromCanonicalLispCmd (lisp,varmap) = fromCanonicalMathExpr (lisp2mathExpr lisp,varmap)
 
 -- | Converts MathExpr into a lisp command suitable for passing to Herbie
 mathExpr2lisp :: MathExpr -> String
@@ -204,18 +187,49 @@ mathExpr2lisp = go
             else show (fromRational r :: Double)
 
 -- | Converts a lisp command into a MathExpr
-str2mathExpr :: String -> MathExpr
-str2mathExpr ('-':xs) = EMonOp "negate" (str2mathExpr xs)
-str2mathExpr ('(':xs) = if length xs > 1 && last xs==')'
+lisp2mathExpr :: String -> MathExpr
+lisp2mathExpr ('-':xs) = EMonOp "negate" (lisp2mathExpr xs)
+lisp2mathExpr ('(':xs) = if length xs > 1 && last xs==')'
     then case groupByParens $ init xs of
-        [op,e1]             -> EMonOp op (str2mathExpr e1)
-        [op,e1,e2]          -> EBinOp op (str2mathExpr e1) (str2mathExpr e2)
-        ["if",cond,e1,e2]   -> EIf (str2mathExpr cond) (str2mathExpr e1) (str2mathExpr e2)
-        _                   -> error $ "str2mathExpr: "++xs
-    else error $ "str2mathExpr: malformed input '("++xs++"'"
-str2mathExpr xs = case readMaybe xs :: Maybe Double of
+        [op,e1]             -> EMonOp op (lisp2mathExpr e1)
+        [op,e1,e2]          -> EBinOp op (lisp2mathExpr e1) (lisp2mathExpr e2)
+        ["if",cond,e1,e2]   -> EIf (lisp2mathExpr cond) (lisp2mathExpr e1) (lisp2mathExpr e2)
+        _                   -> error $ "lisp2mathExpr: "++xs
+    else error $ "lisp2mathExpr: malformed input '("++xs++"'"
+lisp2mathExpr xs = case readMaybe xs :: Maybe Double of
     Just x -> ELit $ toRational x
     Nothing -> ELeaf xs
+
+-- | Extracts all the variables from the lisp commands with no duplicates.
+lisp2vars :: String -> [String]
+lisp2vars = nub . lisp2varsNoNub
+
+-- | Extracts all the variables from the lisp commands.
+-- Each variable occurs once in the output for each time it occurs in the input.
+lisp2varsNoNub :: String -> [String]
+lisp2varsNoNub lisp
+    = sort
+    $ filter (\x -> x/="("
+                 && x/=")"
+                 && not (x `elem` binOpList)
+                 && not (x `elem` monOpList)
+                 && not (head x `elem` ("1234567890"::String))
+             )
+    $ tokenize lisp :: [String]
+    where
+        -- We just need to add spaces around the parens before calling "words"
+        tokenize :: String -> [String]
+        tokenize = words . concat . map go
+            where
+                go '(' = " ( "
+                go ')' = " ) "
+                go x   = [x]
+
+lispHasRepeatVars :: String -> Bool
+lispHasRepeatVars lisp = length (lisp2vars lisp) /= length (lisp2varsNoNub lisp)
+
+-------------------------------------------------------------------------------
+-- utilities
 
 readMaybe :: Read a => String -> Maybe a
 readMaybe = fmap fst . listToMaybe . reads

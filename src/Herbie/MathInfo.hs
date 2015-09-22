@@ -41,79 +41,26 @@ traceM a = return ()
 data ParamType = ParamType
     { getQuantifier :: [Var]
     , getCxt        :: [Type]
-    , getDicts      :: [Var]
+    , getDicts      :: [CoreExpr]
     , getParam      :: Type
     }
 
--- | Convert the type of a function into its ParamType representation
-mkParamType :: [Var] -> Type -> Maybe ParamType
-mkParamType dicts t = do
-    let (quantifier,unquantified) = extractQuantifiers t
-        (cxt,uncxt) = extractContext unquantified
-    t' <- extractParam uncxt
-    Just $ ParamType
-        { getQuantifier = quantifier
-        , getCxt        = cxt
-        , getDicts      = dicts
-        , getParam      = t'
-        }
-    where
-
--- | Given a type of the form
---
--- > A -> ... -> C
---
--- returns C
-getReturnType :: Type -> Type
-getReturnType t = case splitForAllTys t of
-    (_,t') -> go t'
-    where
-        go t = case splitTyConApp_maybe t of
-            Just (tycon,[_,t']) -> if getString tycon=="(->)"
-                then go t'
-                else t
-            _ -> t
-
-
--- dictFromParamType :: Class -> ParamType -> CoreM (Maybe (Expr Var))
--- dictFromParamType c pt =
---     trace ("getDicts="++showSDoc dynFlags (ppr $ getDicts pt)) $
---     return $ getDictExprFor c (getParam pt) (map Var $ getDicts pt)
-
-getClasses :: ParamType -> [Class]
-getClasses pt = concat $ map go $ getCxt pt
-    where
-        go t = case classifyPredType t of
-            ClassPred c _ -> [c]
-            TuplePred xs  -> concatMap go xs
-            _ -> []
-
-getSuperClasses :: Class -> [Class]
-getSuperClasses c = c : (nub $ concat $ map getSuperClasses $ concat $ map go $ classSCTheta c)
-    where
-        go t = case classifyPredType t of
-            ClassPred c _ -> [c]
-            TuplePred xs  -> concatMap go xs
-            _ -> []
-
---------------------------------------------------------------------------------
--- convert Expr into MathExpr
-
+-- | This type is a simplified version of the CoreExpr type.
+-- It only supports math expressions.
+-- We first convert a CoreExpr into a MathInfo,
+-- perform all the manipulation on the MathExpr within the MathInfo,
+-- then use the information in MathInfo to convert the MathExpr back into a CoreExpr.
 data MathInfo = MathInfo
-    { hexpr :: MathExpr
-    , numType :: ParamType
-    , getExprs :: [(String,Expr Var)]
+    { getMathExpr   :: MathExpr
+    , getParamType  :: ParamType
+    , getExprs      :: [(String,Expr Var)]
+        -- ^ the fst value is the unique name assigned to non-mathematical expressions
+        -- the snd value is the expression
     }
-
-herbie2lisp :: DynFlags -> MathInfo -> String
-herbie2lisp dflags herbie = mathExpr2lisp (hexpr herbie)
-
-findExpr :: MathInfo -> String -> Maybe (Expr Var)
-findExpr herbie str = lookup str (getExprs herbie)
 
 -- | Pretty print a math expression
 pprMathInfo :: MathInfo -> String
-pprMathInfo mathInfo = go 1 False $ hexpr mathInfo
+pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
     where
         isLitOrLeaf :: MathExpr -> Bool
         isLitOrLeaf (ELit _ ) = True
@@ -154,9 +101,6 @@ pprMathInfo mathInfo = go 1 False $ hexpr mathInfo
                         where
                             white = replicate (4*i) ' '
 
-
-----------------------------------------
-
 -- If the given expression is a math expression,
 -- returns the type of the variable that the math expression operates on.
 varTypeIfValidExpr :: CoreExpr -> Maybe Type
@@ -185,31 +129,28 @@ varTypeIfValidExpr e = case e of
             Nothing -> True
             Just (tyCon,_) -> tyCon == floatTyCon || tyCon == doubleTyCon
 
+-- | Converts a CoreExpr into a MathInfo
 mkMathInfo :: DynFlags -> [Var] -> Type -> Expr Var -> Maybe MathInfo
 mkMathInfo dflags dicts bndType e = case varTypeIfValidExpr e of
         Nothing -> Nothing
-        Just t -> if mathExprDepth hexpr>1 && lispHasRepeatVars (mathExpr2lisp hexpr)
+        Just t -> if mathExprDepth getMathExpr>1 && lispHasRepeatVars (mathExpr2lisp getMathExpr)
             then Just $ MathInfo
-                hexpr
+                getMathExpr
                 ( ParamType
                     { getQuantifier = quantifier
                     , getCxt = cxt
-                    , getDicts = dicts
+                    , getDicts = map Var dicts
                     , getParam = t
                     }
                 ) exprs
             else Nothing
 
     where
-        (hexpr,exprs) = go e []
+        (getMathExpr,exprs) = go e []
 
         -- this should never return Nothing if validExpr is not Nothing
         (quantifier,unquantified) = extractQuantifiers bndType
         (cxt,uncxt) = extractContext unquantified
-
-        pt = case mkParamType dicts bndType of
-            Just pt -> pt
-            Nothing -> error $ "mkMathInfo: varType="++dbg (varTypeIfValidExpr e)++"; bndType="++dbg bndType
 
         -- recursively converts the `Expr Var` into a MathExpr and a dictionary
         go :: Expr Var
@@ -259,10 +200,11 @@ mkMathInfo dflags dicts bndType e = case varTypeIfValidExpr e of
         -- everything else
         go e exprs = (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
 
+-- | Converts a MathInfo back into a CoreExpr
 mathInfo2expr :: ModGuts -> MathInfo -> ExceptT String CoreM CoreExpr
-mathInfo2expr guts herbie = go (hexpr herbie)
+mathInfo2expr guts herbie = go (getMathExpr herbie)
     where
-        pt = numType herbie
+        pt = getParamType herbie
 
         -- binary operators
         go (EBinOp opstr a1 a2) = do
@@ -275,20 +217,14 @@ mathInfo2expr guts herbie = go (hexpr herbie)
         go (EMonOp opstr a) = do
             a' <- go a
             f <- getDecoratedFunction guts opstr (getParam pt) (getDicts pt)
---             return $ App f a'
             castToType
-                (map Var $ getDicts pt)
+                (getDicts pt)
                 (getParam pt)
                 $ App f a'
 
---     castToType
---         (map Var preds)
---         t
---         $ mkApps (App (Var f) (Type t)) cxt''
-
         -- if statements
         go (EIf cond a1 a2) = do
-            cond' <- go cond >>= castToType (map Var $ getDicts pt) boolTy
+            cond' <- go cond >>= castToType (getDicts pt) boolTy
             a1' <- go a1
             a2' <- go a2
 
@@ -335,7 +271,7 @@ mathInfo2expr guts herbie = go (hexpr herbie)
         -- leaf is any other expression
         go (ELeaf str) = do
             dflags <- getDynFlags
-            return $ case findExpr herbie str of
+            return $ case lookup str (getExprs herbie) of
                 Just x -> x
                 Nothing -> error $ "mathInfo2expr: var " ++ str ++ " not in scope"
                     ++"; in scope vars="++show (nub $ map fst $ getExprs herbie)

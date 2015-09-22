@@ -27,7 +27,7 @@ import Prelude
 -- | Given a MathExpr, return a numerically stable version.
 stabilizeMathExpr :: DbgInfo -> MathExpr -> IO (StabilizerResult MathExpr)
 stabilizeMathExpr dbgInfo cmdin = do
-    let (cmdinLisp,varmap) = getCanonicalLispCmd $ haskellToHerbieOps cmdin
+    let (cmdinLisp,varmap) = getCanonicalLispCmd $ haskellOpsToHerbieOps cmdin
     res <- stabilizeLisp dbgInfo cmdinLisp
     cmdout <- do
         -- FIXME:
