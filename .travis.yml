@@ -37,7 +37,7 @@ before_install:
 install:
 
  # install herbie-exec
- - /usr/racket/bin/raco exe -o herbie-exec herbie/herbie/interface/inout.rkt
+ - raco exe -o herbie-exec herbie/herbie/interface/inout.rkt
  - mv herbie-exec /home/travis/.cabal/bin
 
  # manually download the expression database
