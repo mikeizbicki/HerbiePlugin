@@ -25,6 +25,13 @@ install:
  - /usr/racket/bin/raco exe -o herbie-exec herbie/herbie/interface/inout.rkt
  - sudo mv herbie-exec /usr/local/bin
 
+ # manually download the expression database
+ - wget https://github.com/mikeizbicki/HerbiePlugin/raw/master/data/Herbie.db
+ - mkdir -p /home/travis/.cabal/share/x86_64-linux-ghc-7.10.1/HerbiePlugin-0.1.0.0/
+ - cp Herbie.db /home/travis/.cabal/share/x86_64-linux-ghc-7.10.1/HerbiePlugin-0.1.0.0/
+ - mkdir -p /home/travis/.cabal/share/x86_64-linux-ghc-7.10.2/HerbiePlugin-0.1.0.0/
+ - cp Herbie.db /home/travis/.cabal/share/x86_64-linux-ghc-7.10.2/HerbiePlugin-0.1.0.0/
+
  # install HerbiePlugin
  - cabal --version
  - echo "$(ghc --version) [$(ghc --print-project-git-commit-id 2> /dev/null || echo '?')]"
