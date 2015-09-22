@@ -28,8 +28,6 @@ before_install:
  - export RACKET_DIR=/home/travis/racket
  - export PATH=~/.cabal/bin:/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:/opt/happy/$HAPPYVER/bin:/opt/alex/$ALEXVER/bin:$RACKET_DIR/bin:$PATH
 
- - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:$PATH
-
  # install Racket
  - git clone https://github.com/greghendershott/travis-racket.git
  - cat travis-racket/install-racket.sh | bash # pipe to bash not sh!
