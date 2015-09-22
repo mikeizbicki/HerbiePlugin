@@ -66,7 +66,7 @@ getVar guts opstr = do
                 else error $ "getName: '"++str++"'"
             where
                 isCorrectVar x = (getString $ gre_name x) == str
-                              && (case gre_par x of NoParent -> False; _ -> True)
+                              && (str == "abs" || case gre_par x of NoParent -> False; _ -> True)
 
 -- | Like "decorateFunction", but first finds the function variable given a string.
 getDecoratedFunction :: ModGuts -> String -> Type -> [Var] -> ExceptT String CoreM CoreExpr

@@ -19,6 +19,7 @@ import Control.Monad
 import Control.Monad.Except
 import Data.Maybe
 
+import Herbie.CoreManip
 import Herbie.ForeignInterface
 import Herbie.MathExpr
 import Herbie.MathInfo
@@ -163,6 +164,8 @@ modBind opts guts bndr@(NonRec b e) = do
                             putMsgS str
                             return e
                         Right e' -> do
+--                             putMsgS $ "  before = " ++ myshow dflags e
+--                             putMsgS $ "  after = " ++ myshow dflags e'
                             return e'
 
 -- | Return a list with the given variable if the variable is a dictionary or tuple of dictionaries,

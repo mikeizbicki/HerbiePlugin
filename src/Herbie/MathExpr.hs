@@ -32,8 +32,28 @@ monOpList =
     , "size"
     ]
 
-binOpList = [ "/", "-" ] ++ commutativeOpList
+binOpList = [ "^", "**", "^^", "/", "-", "expt" ] ++ commutativeOpList
 commutativeOpList = [ "*", "+"] -- , "max", "min" ]
+
+haskellToHerbieOps :: MathExpr -> MathExpr
+haskellToHerbieOps = go
+    where
+        go (EBinOp op e1 e2) = EBinOp op' (go e1) (go e2)
+            where
+                op' = case op of
+                    "**"   -> "expt"
+                    "^^"   -> "expt"
+                    "^"    -> "expt"
+                    x      -> x
+
+        go (EMonOp op e1) = EMonOp op' (go e1)
+            where
+                op' = case op of
+                    "size" -> "abs"
+                    x      -> x
+
+        go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)
+        go x = x
 
 herbieOpsToHaskellOps :: MathExpr -> MathExpr
 herbieOpsToHaskellOps = go
@@ -178,8 +198,10 @@ mathExpr2lisp = go
         go (EBinOp op a1 a2) = "("++op++" "++go a1++" "++go a2++")"
         go (EMonOp op a) = "("++op++" "++go a++")"
         go (EIf cond e1 e2) = "(if "++go cond++" "++go e1++" "++go e2++")"
-        go (ELit r) = show (fromRational r :: Double)
         go (ELeaf e) = e
+        go (ELit r) = if (toRational (floor r::Integer) == r)
+            then show (floor r :: Integer)
+            else show (fromRational r :: Double)
 
 -- | Converts a lisp command into a MathExpr
 str2mathExpr :: String -> MathExpr

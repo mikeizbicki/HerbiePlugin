@@ -27,7 +27,7 @@ import Prelude
 -- | Given a MathExpr, return a numerically stable version.
 stabilizeMathExpr :: DbgInfo -> MathExpr -> IO (StabilizerResult MathExpr)
 stabilizeMathExpr dbgInfo cmdin = do
-    let (cmdinLisp,varmap) = getCanonicalLispCmd cmdin
+    let (cmdinLisp,varmap) = getCanonicalLispCmd $ haskellToHerbieOps cmdin
     res <- stabilizeLisp dbgInfo cmdinLisp
     cmdout <- do
         -- FIXME:
@@ -53,18 +53,24 @@ stabilizeMathExpr dbgInfo cmdin = do
 -- It first checks if the command is in the global database;
 -- if it's not, then it runs "execHerbie".
 stabilizeLisp :: DbgInfo -> String -> IO (StabilizerResult String)
-stabilizeLisp dbgInfo cmdin = do
-    dbResult <- lookupDatabase cmdin
+stabilizeLisp dbgInfo cmd = do
+    dbResult <- lookupDatabase cmd
     ret <- case dbResult of
         Just x -> do
             return x
         Nothing -> do
             putStrLn "  Not found in database.  Running Herbie..."
-            res <- execHerbie cmdin
+            res <- execHerbie cmd
             insertDatabase res
             return res
     insertDatabaseDbgInfo dbgInfo ret
-    return ret
+
+    -- FIXME:
+    -- Herbie has a bug where it sometimes outputs a less numerically stable version.
+    -- So we need to check to make sure we return the more stable output.
+    return $ if errin ret > errout ret
+        then ret
+        else ret { errout = errin ret, cmdout = cmdin ret }
 
 -- | Run the `herbie` command and return the result
 execHerbie :: String -> IO (StabilizerResult String)

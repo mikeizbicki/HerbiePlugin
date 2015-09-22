@@ -29,8 +29,8 @@ import Herbie.MathExpr
 import Prelude
 import Show
 
-import Debug.Trace hiding (traceM)
--- trace a b = b
+-- import Debug.Trace hiding (traceM)
+trace a b = b
 traceM a = return ()
 
 --------------------------------------------------------------------------------
@@ -275,7 +275,16 @@ mathInfo2expr guts herbie = go (hexpr herbie)
         go (EMonOp opstr a) = do
             a' <- go a
             f <- getDecoratedFunction guts opstr (getParam pt) (getDicts pt)
-            return $ App f a'
+--             return $ App f a'
+            castToType
+                (map Var $ getDicts pt)
+                (getParam pt)
+                $ App f a'
+
+--     castToType
+--         (map Var preds)
+--         t
+--         $ mkApps (App (Var f) (Type t)) cxt''
 
         -- if statements
         go (EIf cond a1 a2) = do

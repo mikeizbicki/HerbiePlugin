@@ -207,7 +207,7 @@ example55 x = sqrt(x^2 / 3)
 
 example56 a b = 100*(a-b)/a
 
-example57 x = sqrt(x^3)-x^3
+example57 x = abs(x^3)-x^3
 
 example58 x = log(x) - log(x+1)
 
