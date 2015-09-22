@@ -155,9 +155,13 @@ modBind opts guts bndr@(NonRec b e) = do
                             }
                     res <- liftIO $ stabilizeMathExpr dbgInfo $ getMathExpr mathInfo
                     let mathInfo' = mathInfo { getMathExpr = cmdout res }
-                    putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
-                    putMsgS $ "  original error = "++show (errin res)++" bits"
-                    putMsgS $ "  improved error = "++show (errout res)++" bits"
+                    if errin res-errout res > 0
+                        then do
+                            putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
+                            putMsgS $ "  original error = "++show (errin res)++" bits"
+                            putMsgS $ "  improved error = "++show (errout res)++" bits"
+                        else do
+                            putMsgS $ "  Herbie could not improve the stability of the original expression"
                     ret <- runExceptT $ mathInfo2expr guts mathInfo'
                     case ret of
                         Left str -> do
