@@ -18,6 +18,7 @@ import System.Directory
 import System.Process
 import System.Timeout
 
+import Paths_HerbiePlugin
 import Herbie.MathInfo
 import Herbie.MathExpr
 
@@ -152,6 +153,11 @@ instance FromField a => FromRow (StabilizerResult a) where
 instance ToField a => ToRow (StabilizerResult a) where
     toRow (StabilizerResult cmdin cmdout errin errout) = toRow (cmdin, cmdout, errin, errout)
 
+-- | Returns a connection to the sqlite3 database
+mkConn = do
+    path <- getDataFileName "Herbie.db"
+    open path
+
 -- | Check the database to see if we already know the answer for running Herbie
 --
 -- FIXME:
@@ -163,9 +169,7 @@ instance ToField a => ToRow (StabilizerResult a) where
 lookupDatabase :: String -> IO (Maybe (StabilizerResult String))
 lookupDatabase cmdin = do
     ret <- try $ do
-        dirname <- getAppUserDataDirectory "Stabalizer"
-        createDirectoryIfMissing True dirname
-        conn <- open $ dirname++"/Stabalizer.db"
+        conn <- mkConn
         res <- queryNamed
             conn
             "SELECT cmdin,cmdout,errin,errout from StabilizerResults where cmdin = :cmdin"
@@ -185,9 +189,7 @@ lookupDatabase cmdin = do
 insertDatabase :: StabilizerResult String -> IO ()
 insertDatabase res = do
     ret <- try $ do
-        dirname <- getAppUserDataDirectory "Stabalizer"
-        createDirectoryIfMissing True dirname
-        conn <- open $ dirname++"/Stabalizer.db"
+        conn <- mkConn
         execute_ conn $ fromString $
             "CREATE TABLE IF NOT EXISTS StabilizerResults "
             ++"( id INTEGER PRIMARY KEY"
@@ -216,9 +218,7 @@ data DbgInfo = DbgInfo
 insertDatabaseDbgInfo :: DbgInfo -> StabilizerResult String -> IO ()
 insertDatabaseDbgInfo dbgInfo res = do
     ret <- try $ do
-        dirname <- getAppUserDataDirectory "Stabalizer"
-        createDirectoryIfMissing True dirname
-        conn <- open $ dirname++"/Stabalizer.db"
+        conn <- mkConn
         execute_ conn $ fromString $
             "CREATE TABLE IF NOT EXISTS DbgInfo "
             ++"( id INTEGER PRIMARY KEY"

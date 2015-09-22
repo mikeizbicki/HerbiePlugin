@@ -16,7 +16,9 @@ version:             0.1.0.0
 synopsis:            automatically improve your code's numeric stability
 
 -- A longer description of the package.
--- description:
+description:
+    This package contains a GHC plugin that automatically improves the numerical stability of your Haskell code.
+    See <http://github.com/mikeizbicki/HerbiePlugin the github repo> for details on how it works and how to use it.
 
 -- URL for the project homepage or repository.
 homepage:            github.com/mikeizbicki/herbie-haskell
@@ -45,8 +47,18 @@ build-type:          Simple
 -- README.
 -- extra-source-files:
 
+data-files:
+    Herbie.db
+
+data-dir:
+    data
+
 -- Constraint on the version of Cabal needed to build this package.
 cabal-version:       >=1.10
+
+source-repository head
+    type: git
+    location: http://github.com/mikeizbicki/HerbiePlugin
 
 
 library
@@ -61,9 +73,10 @@ library
     Herbie.MathExpr
     Herbie.MathInfo
     Show
+    Paths_HerbiePlugin
 
   -- LANGUAGE extensions used by modules in this package.
-  extensions:
+  default-extensions:
     MultiWayIf
     ScopedTypeVariables
     DeriveGeneric

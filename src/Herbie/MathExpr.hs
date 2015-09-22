@@ -29,6 +29,7 @@ monOpList =
     , "log"
     , "sqrt"
     , "abs"
+    , "size"
     ]
 
 binOpList = [ "/", "-" ] ++ commutativeOpList
@@ -49,6 +50,7 @@ herbieOpsToHaskellOps = go
             where
                 op' = case op of
                     "-" -> "negate"
+                    "abs" -> "size"
                     x   -> x
 
         go (EIf cond e1 e2) = EIf (go cond) (go e1) (go e2)

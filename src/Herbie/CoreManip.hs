@@ -28,8 +28,8 @@ import Herbie.MathExpr
 import Prelude
 import Show
 
-import Debug.Trace hiding (traceM)
--- trace a b = b
+-- import Debug.Trace hiding (traceM)
+trace a b = b
 traceM a = return ()
 
 --------------------------------------------------------------------------------
@@ -63,7 +63,7 @@ getVar guts opstr = do
         getName guts str = case filter isCorrectVar (concat $ occEnvElts (mg_rdr_env guts)) of
             xs -> if length xs>0
                 then gre_name $ head $ xs
-                else error $ "getNameParent: '"++str++"'"
+                else error $ "getName: '"++str++"'"
             where
                 isCorrectVar x = (getString $ gre_name x) == str
                               && (case gre_par x of NoParent -> False; _ -> True)
