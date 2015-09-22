@@ -1,4 +1,4 @@
-# Herbie GHC Plugin
+# Herbie GHC Plugin ![](https://travis-ci.org/mikeizbicki/HerbiePlugin.svg)
 
 The Herbie [GHC Plugin](https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/compiler-plugins.html) automatically improves the [numerical stability](https://en.wikipedia.org/wiki/Numerical_stability) of your Haskell code.
 The Herbie plugin fully supports the [SubHask](http://github.com/mikeizbicki/subhask) numeric prelude,
@@ -41,7 +41,7 @@ This modified code is numerically stable.
 The if statements check to see which regime we are in (very small or very large)
 and select the calculation that is most appropriate for this regime.
 
-The [test suite](/tests/Tests.hs) contains MANY more examples of the types of expressions the Herbie plugin can analyze.
+The [test suite](/test/Tests.hs) contains MANY more examples of the types of expressions the Herbie plugin can analyze.
 
 ## How it works
 
@@ -286,7 +286,7 @@ The easiest way to find the offending code in each package is to compile the pac
 
 ## Known Bugs
 
-There are no known bugs when compiling programs that use the [SubHask](github.com/mikeizbicki/subhask) numeric prelude.
+There are no known bugs when compiling programs that use the [SubHask](https://github.com/mikeizbicki/subhask) numeric prelude.
 
 The standard Prelude is only partially supported.
 In particular, the Herbie plugin is able to extract mathematical expressions correctly and will print the stabilized version to stdout.
