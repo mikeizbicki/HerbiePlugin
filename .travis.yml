@@ -26,11 +26,11 @@ before_install:
  - unset CC
  - export HAPPYVER=1.19.5
  - export ALEXVER=3.1.4
- - export RACKET_DIR=$HOME/racket
+ - export RACKET_DIR=$HOME/racket/$RACKET_VERSION
  - export PATH=~/.cabal/bin:/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:/opt/happy/$HAPPYVER/bin:/opt/alex/$ALEXVER/bin:$RACKET_DIR/bin:$PATH
 
  # install Racket if it isn't already installed
- - if [ ! -f $RACKET_DIR/bin/raco ]; then
+ - if [ ! -d $RACKET_DIR ]; then
      git clone https://github.com/greghendershott/travis-racket.git;
      cat travis-racket/install-racket.sh | bash;
    fi
