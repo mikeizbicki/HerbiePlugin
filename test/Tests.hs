@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs,RebindableSyntax,CPP,FlexibleContexts,FlexibleInstances,ConstraintKinds #-}
+{-# LANGUAGE StandaloneDeriving,DeriveDataTypeable #-}
 {-
  - The idea of this test suite is that it should be compiled
  - with the -fplugin=Herbie and -dcore-lint flags.
@@ -9,6 +10,17 @@ module Main
     where
 
 import SubHask
+
+--------------------------------------------------------------------------------
+
+-- This section tests that Herbie obeys the code annotations
+
+{-# ANN ann "NoHerbie" #-}
+ann :: Float -> Float
+ann x = x+x+x*x*x*x
+
+noann :: Float -> Float
+noann x = x+x+x*x*x*x
 
 --------------------------------------------------------------------------------
 

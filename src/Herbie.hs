@@ -18,7 +18,9 @@ import TcSimplify
 
 import Control.Monad
 import Control.Monad.Except
+import Data.Data
 import Data.Maybe
+import Data.Typeable
 
 import Herbie.CoreManip
 import Herbie.ForeignInterface
@@ -59,7 +61,10 @@ modBind opts guts bndr@(NonRec b e) = do
 --         ++ showSDoc dflags (ppr $ varType b)
 --     putMsgS $ myshow dflags e
 --     return bndr
-    e' <- go [] e
+    anns <- annotationsOn guts b :: CoreM [String]
+    e' <- if "NoHerbie" `elem` anns
+        then return e
+        else go [] e
     return $ NonRec b e'
     where
         -- Recursively descend into the expression e.
@@ -187,3 +192,10 @@ undeadenId :: Var -> Var
 undeadenId a = if isDeadBinder a
     then setIdOccInfo a NoOccInfo
     else a
+
+-- | Function taken from the docs:
+-- https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/compiler-plugins.html
+annotationsOn :: Data a => ModGuts -> CoreBndr -> CoreM [a]
+annotationsOn guts bndr = do
+  anns <- getAnnotations deserializeWithData guts
+  return $ lookupWithDefaultUFM anns [] (varUnique bndr)

@@ -128,6 +128,21 @@ go a b = go (a-1) (sqrt $ (a+b) * (a+b))
 ```
 the expression `sqrt $ (a+b) * (a+b)` gets rewritten by Herbie into `abs (a+b)`.
 
+#### Disabling Herbie
+
+You can prevent Herbie from analyzing a function using an [annotation pragma](https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/extending-ghc.html#annotation-pragmas).
+In the following example:
+```
+{-# ANN foo "NoHerbie" #-}
+foo x = (x + 1) - x
+```
+Herbie will NOT rewrite the code into
+```
+foo x = 1
+```
+These GHC annotations can only be applied to top level bindings.
+They prevent Herbie from searching anywhere inside the binding.
+
 ### Improving the stability of expressions
 
 The Herbie plugin uses two sources of information to find numerically stable replacements for expressions.
