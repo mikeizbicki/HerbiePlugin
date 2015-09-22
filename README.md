@@ -41,7 +41,7 @@ This modified code is numerically stable.
 The if statements check to see which regime we are in (very small or very large)
 and select the calculation that is most appropriate for this regime.
 
-The [test suite](/tests/Tests.hs) contains MANY more examples of the types of expressions the Herbie plugin can analyze.
+The [test suite](/test/Tests.hs) contains MANY more examples of the types of expressions the Herbie plugin can analyze.
 
 ## How it works
 
