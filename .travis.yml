@@ -69,7 +69,6 @@ install:
      rm -rf $HOME/.cabsnap;
      mkdir -p $HOME/.ghc $HOME/.cabal/lib $HOME/.cabal/share $HOME/.cabal/bin;
      cabal install --only-dependencies --enable-tests --enable-benchmarks;
-     # if [ "$GHCVER" = "7.10.1" ]; then cabal install Cabal-1.22.4.0; fi; # enable this if we switch to a custom Setup.hs
    fi
 
 # snapshot package-db on cache miss
@@ -82,7 +81,6 @@ install:
 
 # Here starts the actual work to be performed for the package under test; any command which exits with a non-zero exit code causes the build to fail.
 script:
- # - if [ -f configure.ac ]; then autoreconf -i; fi # enable this if we need autoconf
  - cabal configure --enable-tests --enable-benchmarks -v2  # -v2 provides useful information for debugging
  - cabal build   # this builds all libraries and executables (including tests/benchmarks)
  - cabal test
