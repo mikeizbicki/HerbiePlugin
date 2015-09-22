@@ -286,7 +286,7 @@ The easiest way to find the offending code in each package is to compile the pac
 
 ## Known Bugs
 
-There are no known bugs when compiling programs that use the [SubHask](github.com/mikeizbicki/subhask) numeric prelude.
+There are no known bugs when compiling programs that use the [SubHask](https://github.com/mikeizbicki/subhask) numeric prelude.
 
 The standard Prelude is only partially supported.
 In particular, the Herbie plugin is able to extract mathematical expressions correctly and will print the stabilized version to stdout.
