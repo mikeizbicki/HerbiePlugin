@@ -165,7 +165,7 @@ modBind opts guts bndr@(NonRec b e) = do
                     let mathInfo' = mathInfo { getMathExpr = cmdout res }
 
                     -- Display the improved expression if found
-                    let canRewrite = errin res-errout res > optsTol pluginOpts
+                    let canRewrite = True -- errin res-errout res > optsTol pluginOpts
                     if canRewrite
                         then do
                             putMsgS $ "  improved expression = "++pprMathInfo mathInfo'

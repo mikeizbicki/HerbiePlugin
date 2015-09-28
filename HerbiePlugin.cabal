@@ -95,6 +95,7 @@ library
                       , directory
                       , deepseq
                       , mtl
+                      , split
 
   -- Directories containing source files.
   hs-source-dirs:      src
@@ -125,6 +126,7 @@ Test-Suite ValidRewrite
 
     ghc-options:
         -fplugin=Herbie
+        -fplugin-opts=Herbie:tol=0
 
     build-depends:
         base,

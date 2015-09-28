@@ -4,6 +4,7 @@ module Herbie.MathExpr
 
 import Control.DeepSeq
 import Data.List
+import Data.List.Split
 import Data.Maybe
 import GHC.Generics
 
@@ -196,9 +197,11 @@ lisp2mathExpr ('(':xs) = if length xs > 1 && last xs==')'
         ["if",cond,e1,e2]   -> EIf (lisp2mathExpr cond) (lisp2mathExpr e1) (lisp2mathExpr e2)
         _                   -> error $ "lisp2mathExpr: "++xs
     else error $ "lisp2mathExpr: malformed input '("++xs++"'"
-lisp2mathExpr xs = case readMaybe xs :: Maybe Double of
-    Just x -> ELit $ toRational x
-    Nothing -> ELeaf xs
+lisp2mathExpr xs = case splitOn "/" xs of
+    [num,den] -> lisp2mathExpr $ "(/ "++num++" "++den++")"
+    _ -> case readMaybe xs :: Maybe Double of
+        Just x -> ELit $ toRational x
+        Nothing -> ELeaf xs
 
 -- | Extracts all the variables from the lisp commands with no duplicates.
 lisp2vars :: String -> [String]
