@@ -1,5 +1,7 @@
 {-# LANGUAGE GADTs,RebindableSyntax,CPP,FlexibleContexts,FlexibleInstances,ConstraintKinds #-}
-{-# LANGUAGE StandaloneDeriving,DeriveDataTypeable #-}
+
+{-# GHC-OPTS -dcore-lint #-}
+
 {-
  - The idea of this test suite is that it should be compiled
  - with the -fplugin=Herbie and -dcore-lint flags.

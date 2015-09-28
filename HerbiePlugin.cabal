@@ -10,7 +10,7 @@ name:                HerbiePlugin
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
 --                   | | | +--- code changes with no API change
-version:             0.1.0.0
+version:             0.2.0.0
 
 -- A short (one-line) description of the package.
 synopsis:            automatically improve your code's numeric stability
@@ -111,7 +111,6 @@ Test-Suite Tests
 
     ghc-options:
         -fplugin=Herbie
-        -dcore-lint
 
     build-depends:
         base,
