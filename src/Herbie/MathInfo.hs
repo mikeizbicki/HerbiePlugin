@@ -73,7 +73,7 @@ pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
             else str
             where
                 str = case e of
-                    EMonOp op e1 -> op++" "++(go i True e1)
+                    EMonOp op e1 -> op++" "++ go i True e1
 
                     EBinOp op e1 e2 -> go i parens1 e1++" "++op++" "++go i parens2 e2
                         where
@@ -136,13 +136,13 @@ mkMathInfo dflags dicts bndType e = case varTypeIfValidExpr e of
         Just t -> if mathExprDepth getMathExpr>1 && lispHasRepeatVars (mathExpr2lisp getMathExpr)
             then Just $ MathInfo
                 getMathExpr
-                ( ParamType
+                ParamType
                     { getQuantifier = quantifier
                     , getCxt = cxt
                     , getDicts = map Var dicts
                     , getParam = t
                     }
-                ) exprs
+                exprs
             else Nothing
 
     where
@@ -229,7 +229,7 @@ mathInfo2expr guts herbie = go (getMathExpr herbie)
             a2' <- go a2
 
             wildUniq <- getUniqueM
-            let wildName = mkSystemName wildUniq (mkVarOcc $ "wild")
+            let wildName = mkSystemName wildUniq (mkVarOcc "wild")
                 wildVar = mkLocalVar VanillaId wildName boolTy vanillaIdInfo
 
             return $ Case
@@ -249,7 +249,7 @@ mathInfo2expr guts herbie = go (getMathExpr herbie)
 
             ratioTyCon <- lookupTyCon ratioTyConName
             tmpUniq <- getUniqueM
-            let tmpName = mkSystemName tmpUniq (mkVarOcc $ "a")
+            let tmpName = mkSystemName tmpUniq (mkVarOcc "a")
                 tmpVar = mkTyVar tmpName liftedTypeKind
                 tmpVarT = mkTyVarTy tmpVar
                 ratioConTy = mkForAllTy tmpVar $ mkFunTys [tmpVarT,tmpVarT] $ mkAppTy (mkTyConTy ratioTyCon) tmpVarT

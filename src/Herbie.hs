@@ -128,7 +128,7 @@ modBind opts guts bndr@(NonRec b e) = do
                         cond' <- go dicts cond
                         es' <- forM es $ \ (altcon, xs, expr) -> do
                             expr' <- go dicts expr
-                            return $ (altcon, xs, expr')
+                            return (altcon, xs, expr')
                         return $ Case cond' w t es'
 
                     -- Ticks and Casts are just annotating extra information on an expression.
