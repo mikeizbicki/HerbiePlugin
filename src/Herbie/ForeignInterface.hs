@@ -44,9 +44,9 @@ stabilizeMathExpr dbgInfo cmdin = do
             { cmdin  = cmdin
             , cmdout = cmdout'
             }
-    putStrLn $ "  cmdin:   "++cmdinLisp
-    putStrLn $ "  cmdout:  "++cmdout res
-    putStrLn $ "  stabilizeLisp': "++mathExpr2lisp (fromCanonicalLispCmd (cmdout res,varmap))
+--     putStrLn $ "  cmdin:   "++cmdinLisp
+--     putStrLn $ "  cmdout:  "++cmdout res
+--     putStrLn $ "  stabilizeLisp': "++mathExpr2lisp (fromCanonicalLispCmd (cmdout res,varmap))
     return res'
 
 -- | Given a Lisp command, return a numerically stable version.

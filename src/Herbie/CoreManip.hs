@@ -483,7 +483,7 @@ getString :: NamedThing a => a -> String
 getString = occNameString . getOccName
 
 expr2str :: DynFlags -> Expr Var -> String
-expr2str dflags (Var v) = {-"var_" ++-} var2str v
+expr2str dflags (Var v) = {-"var_" ++-} var2str v++"_"++showSDoc dflags (ppr $ getUnique v)
 expr2str dflags e       = "expr_" ++ (decorate $ showSDoc dflags (ppr e))
     where
         decorate :: String -> String
