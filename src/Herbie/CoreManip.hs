@@ -319,7 +319,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                                       , Cast inputExpr $ mkSubCo $ mkCoercion tyCons
                                       ) ]
 
-            -- | FIXME: ClassPred and TuplePred are both handled the same
+            -- FIXME: ClassPred and TuplePred are both handled the same
             -- within castToPred and getPredEvidence.
             -- They should be factored out?
             ClassPred c' [ct] -> go $
