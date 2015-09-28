@@ -23,6 +23,14 @@ test1a far near = -(2 * far * near) / (far - near)
 test1b :: Double -> Double -> Double
 test1b far near = -(2 * far * near) / (far - near)
 
+{-# ANN test1c "NoHerbie" #-}
+test1c :: Double -> Double -> Double
+test1c far near = -(if far < (negate 1.7210442634149447e81)
+    then (far / (far - near)) * 2 * near
+    else if far < 8.364504563556443e16
+        then (far * 2) / (far - near) / near
+        else (far / (far - near)) * 2 * near)
+
 --------------------
 
 test2a :: Double -> Double -> Double
@@ -62,6 +70,10 @@ main = do
     mkTest(test1a,test1b,-2e90,6)
     mkTest(test1a,test1b,0,6)
     mkTest(test1a,test1b,2e90,6)
+
+    mkTest(test1a,test1c,-2e90,6)
+    mkTest(test1a,test1c,0,6)
+    mkTest(test1a,test1c,2e90,6)
 
     mkTest(test2a,test2b,1,2)
 
