@@ -117,16 +117,16 @@ Test-Suite Tests
         subhask,
         HerbiePlugin
 
--- Test-Suite ValidRewrite
---     default-language:   Haskell2010
---     type:               exitcode-stdio-1.0
---     hs-source-dirs:     test
---     main-is:            ValidRewrite.hs
---
---     ghc-options:
---         -fplugin=Herbie
---
---     build-depends:
---         base,
---         subhask,
---         HerbiePlugin
+Test-Suite ValidRewrite
+    default-language:   Haskell2010
+    type:               exitcode-stdio-1.0
+    hs-source-dirs:     test
+    main-is:            ValidRewrite.hs
+
+    ghc-options:
+        -fplugin=Herbie
+
+    build-depends:
+        base,
+        subhask,
+        HerbiePlugin

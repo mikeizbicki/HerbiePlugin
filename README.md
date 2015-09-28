@@ -30,7 +30,7 @@ If you compile the linear package with Herbie, the code above gets rewritten to:
 
 ```
 w :: Double -> Double -> Double
-w near far = if far < (negate 1.7210442634149447e81)
+w far near = if far < (negate 1.7210442634149447e81)
     then (far / (far - near)) * 2 * near
     else if far < 8.364504563556443e16
         then (far * 2) / (far - near) / near
