@@ -26,6 +26,7 @@ import Herbie.CoreManip
 import Herbie.ForeignInterface
 import Herbie.MathExpr
 import Herbie.MathInfo
+import Herbie.Options
 
 import Debug.Trace
 
@@ -67,6 +68,8 @@ modBind opts guts bndr@(NonRec b e) = do
         else go [] e
     return $ NonRec b e'
     where
+        pluginOpts = parsePluginOpts opts
+
         -- Recursively descend into the expression e.
         -- For each math expression we find, run Herbie on it.
         -- We need to save each dictionary we find because
@@ -160,23 +163,28 @@ modBind opts guts bndr@(NonRec b e) = do
                             }
                     res <- liftIO $ stabilizeMathExpr dbgInfo $ getMathExpr mathInfo
                     let mathInfo' = mathInfo { getMathExpr = cmdout res }
-                    if errin res-errout res > 0
+
+                    -- Display the improved expression if found
+                    let canRewrite = errin res-errout res > optsTol pluginOpts
+                    if canRewrite
                         then do
                             putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
                             putMsgS $ "  original error = "++show (errin res)++" bits"
                             putMsgS $ "  improved error = "++show (errout res)++" bits"
                         else do
                             putMsgS $ "  Herbie could not improve the stability of the original expression"
-                    ret <- runExceptT $ mathInfo2expr guts mathInfo'
-                    case ret of
-                        Left str -> do
-                            putMsgS "  WARNING: Not substituting the improved expression into your code"
-                            putMsgS str
-                            return e
-                        Right e' -> do
---                             putMsgS $ "  before = " ++ myshow dflags e
---                             putMsgS $ "  after = " ++ myshow dflags e'
-                            return e'
+
+                    -- Rewrite the expression
+                    if not (optsRewrite pluginOpts) || not canRewrite
+                        then return e
+                        else do
+                            ret <- runExceptT $ mathInfo2expr guts mathInfo'
+                            case ret of
+                                Left str -> do
+                                    putMsgS "  WARNING: Not substituting the improved expression into your code"
+                                    putMsgS str
+                                    return e
+                                Right e' -> return e'
 
 -- | Return a list with the given variable if the variable is a dictionary or tuple of dictionaries,
 -- otherwise return [].

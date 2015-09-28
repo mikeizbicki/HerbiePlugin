@@ -29,7 +29,7 @@ stabilizeMathExpr :: DbgInfo -> MathExpr -> IO (StabilizerResult MathExpr)
 stabilizeMathExpr dbgInfo cmdin = do
     let (cmdinLisp,varmap) = getCanonicalLispCmd $ haskellOpsToHerbieOps cmdin
     res <- stabilizeLisp dbgInfo cmdinLisp
-    cmdout <- do
+    cmdout' <- do
         -- FIXME:
         -- Due to a bug in Herbie, fromCanonicalLispCmd sometimes throws an exception.
         ret <- try $ do
@@ -42,11 +42,11 @@ stabilizeMathExpr dbgInfo cmdin = do
             Right x -> return x
     let res' = res
             { cmdin  = cmdin
-            , cmdout = cmdout
+            , cmdout = cmdout'
             }
---     putStrLn $ "cmdin:   "++cmdinLisp
---     putStrLn $ "cmdout:  "++cmdout res
---     putStrLn $ "stabilizeLisp': "++mathExpr2lisp (fromCanonicalLispCmd (cmdout res,varmap))
+--     putStrLn $ "  cmdin:   "++cmdinLisp
+--     putStrLn $ "  cmdout:  "++cmdout res
+--     putStrLn $ "  stabilizeLisp': "++mathExpr2lisp (fromCanonicalLispCmd (cmdout res,varmap))
     return res'
 
 -- | Given a Lisp command, return a numerically stable version.
