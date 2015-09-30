@@ -82,7 +82,7 @@ pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
                                 _ -> True
 
                             parens2 = case e2 of
-                                (EBinOp op' _ _) -> op/=op'
+                                (EBinOp op' _ _) -> op/=op' || not (op `elem` commutativeOpList)
                                 _ -> True
 
                     ELit l -> if toRational (floor l) == l

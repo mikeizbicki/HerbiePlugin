@@ -28,7 +28,7 @@ test1c :: Double -> Double -> Double
 test1c far near = -(if far < (negate 1.7210442634149447e81)
     then (far / (far - near)) * 2 * near
     else if far < 8.364504563556443e16
-        then (far * 2) / (far - near) / near
+        then (far * 2) / ((far - near) / near)
         else (far / (far - near)) * 2 * near)
 
 --------------------
@@ -68,11 +68,11 @@ test3b (Quaternion q0 (V3 q1 q2 q3)) (Quaternion r0 (V3 r1 r2 r3)) =
 
 main = do
     mkTest(test1a,test1b,-2e90,6)
-    mkTest(test1a,test1b,0,6)
+    mkTest(test1a,test1b,3,4)
     mkTest(test1a,test1b,2e90,6)
 
     mkTest(test1a,test1c,-2e90,6)
-    mkTest(test1a,test1c,0,6)
+    mkTest(test1a,test1c,3,4)
     mkTest(test1a,test1c,2e90,6)
 
     mkTest(test2a,test2b,1,2)
