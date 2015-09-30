@@ -1,6 +1,6 @@
 {-# LANGUAGE GADTs,RebindableSyntax,CPP,FlexibleContexts,FlexibleInstances,ConstraintKinds #-}
 
-{-# GHC-OPTS -dcore-lint #-}
+{-# OPTIONS_GHC -dcore-lint #-}
 
 {-
  - The idea of this test suite is that it should be compiled
@@ -13,6 +13,7 @@ module Main
 
 import SubHask
 
+{-
 --------------------------------------------------------------------------------
 
 -- This section tests that Herbie obeys the code annotations
@@ -294,6 +295,9 @@ example87 x = exp x / sqrt(exp x - 1) * sqrt x
 example88 x = (exp(x) - 1) / x
 
 example89 x = sqrt(x + 2) - sqrt(x)
+-}
+
+--------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
 

@@ -130,5 +130,5 @@ Test-Suite ValidRewrite
     build-depends:
         base,
         subhask,
-        HerbiePlugin,
-        linear
+        HerbiePlugin
+--         linear
