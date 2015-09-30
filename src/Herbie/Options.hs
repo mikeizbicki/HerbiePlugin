@@ -3,6 +3,7 @@ module Herbie.Options
     where
 
 import GhcPlugins
+import Prelude
 
 data PluginOpts = PluginOpts
     {

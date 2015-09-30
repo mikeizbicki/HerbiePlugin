@@ -66,6 +66,12 @@ herbie9 x1 = go 4 x1
         go 0 b = b
         go a b = go (a-1) (sqrt (b-1))
 
+herbie10 :: String -> String
+herbie10 str = show ( sqrt (1+fromIntegral (length str))
+                    - sqrt (fromIntegral (length str))
+                    :: Float
+                    )
+
 -- Herbie should not get run on any of the functions in this section.
 
 #define f2(a,b) a+b*(a+b*a)+a*b

@@ -20,6 +20,7 @@ import Control.Monad.Except
 import Control.Monad.Trans
 import Data.Char
 import Data.List
+import Data.List.Split
 import Data.Maybe
 import Data.Ratio
 
@@ -92,8 +93,9 @@ pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
                         else show (fromRational l :: Double)
 
                     ELeaf l -> case lookup l $ getExprs mathInfo of
-                        Just (Var _) -> l
-                        _            -> "???"
+                        Just (Var _) -> pprVariable l mathInfo
+                        Just _       -> pprExpr l mathInfo
+--                         Just _       -> "???"
 
                     EIf cond e1 e2 -> "if "++go i False cond++"\n"
                         ++white++"then "++go (i+1) False e1++"\n"
@@ -101,7 +103,33 @@ pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
                         where
                             white = replicate (4*i) ' '
 
--- If the given expression is a math expression,
+-- | If there is no ambiguity, the variable is displayed without the unique.
+-- Otherwise, it is returned with the unique
+pprVariable :: String -> MathInfo -> String
+pprVariable var mathInfo = if length (filter (==pprvar) pprvars)
+                            > length (filter (==var) $ map fst $ getExprs mathInfo)
+    then var
+    else pprvar
+    where
+        pprvar  = ppr var
+        pprvars = map ppr $ map fst $ getExprs mathInfo
+
+        ppr = concat . intersperse "_" . init . splitOn "_"
+
+-- | The names of expressions are long and awkward.
+-- This gives us a display-friendly version.
+pprExpr :: String -> MathInfo -> String
+pprExpr var mathInfo = "?"++show index
+    where
+        index = case findIndex (==var) notvars of
+            Just x -> x
+
+        notvars
+            = map fst
+            $ filter (\(v,e) -> case e of (Var _) -> False; otherwise -> True)
+            $ getExprs mathInfo
+
+-- | If the given expression is a math expression,
 -- returns the type of the variable that the math expression operates on.
 varTypeIfValidExpr :: CoreExpr -> Maybe Type
 varTypeIfValidExpr e = case e of
