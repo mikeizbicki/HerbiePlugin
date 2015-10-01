@@ -81,12 +81,12 @@ pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
                     EBinOp op e1 e2 -> go i parens1 e1++" "++op++" "++go i parens2 e2
                         where
                             parens1 = case e1 of
-                                (EBinOp op' _ _) -> op/=op'
+--                                 (EBinOp op' _ _) -> op/=op'
                                 (EMonOp _ _) -> False
                                 _ -> True
 
                             parens2 = case e2 of
-                                (EBinOp op' _ _) -> op/=op' || not (op `elem` commutativeOpList)
+--                                 (EBinOp op' _ _) -> op/=op' || not (op `elem` commutativeOpList)
                                 (EMonOp _ _) -> False
                                 _ -> True
 

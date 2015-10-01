@@ -62,6 +62,19 @@ test2b a b = a + ((b - a) / 2)
 --                    (r0*q3-r1*q2+r2*q1-r3*q0))
 --                ^/ (r0*r0 + r1*r1 + r2*r2 + r3*r3)
 
+--------------------
+
+data Yo a = Yo
+    { yo_x2y :: a
+    , yo_y2x :: a
+    }
+
+test4 :: Real a => a -> a -> Yo a
+test4 x y = Yo
+    { yo_x2y = x * x * y
+    , yo_y2x = y * y * x
+    }
+
 --------------------------------------------------------------------------------
 
 -- asinh_ :: Complex Double -> Complex Double
