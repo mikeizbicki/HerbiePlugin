@@ -74,16 +74,20 @@ pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
             else str
             where
                 str = case e of
-                    EMonOp op e1 -> op++" "++ go i True e1
+--                     EMonOp "negate" l@(ELit _) -> "-"++go i False l
+                    EMonOp "negate" e1 ->     "-"++go i False e1
+                    EMonOp op       e1 -> op++" "++go i True  e1
 
                     EBinOp op e1 e2 -> go i parens1 e1++" "++op++" "++go i parens2 e2
                         where
                             parens1 = case e1 of
                                 (EBinOp op' _ _) -> op/=op'
+                                (EMonOp _ _) -> False
                                 _ -> True
 
                             parens2 = case e2 of
                                 (EBinOp op' _ _) -> op/=op' || not (op `elem` commutativeOpList)
+                                (EMonOp _ _) -> False
                                 _ -> True
 
                     ELit l -> if toRational (floor l) == l

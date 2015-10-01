@@ -31,6 +31,7 @@ monOpList =
     , "sqrt"
     , "abs"
     , "size"
+    , "negate"
     ]
 
 binOpList = [ "^", "**", "^^", "/", "-", "expt" ] ++ commutativeOpList
@@ -180,6 +181,7 @@ mathExpr2lisp :: MathExpr -> String
 mathExpr2lisp = go
     where
         go (EBinOp op a1 a2) = "("++op++" "++go a1++" "++go a2++")"
+        go (EMonOp "negate" a) = "(- "++go a++")"
         go (EMonOp op a) = "("++op++" "++go a++")"
         go (EIf cond e1 e2) = "(if "++go cond++" "++go e1++" "++go e2++")"
         go (ELeaf e) = e

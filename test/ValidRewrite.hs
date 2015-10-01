@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs,RebindableSyntax,CPP,FlexibleContexts,FlexibleInstances,ConstraintKinds #-}
 {-# LANGUAGE StandaloneDeriving,DeriveDataTypeable #-}
+{-# OPTIONS_GHC -dcore-lint #-}
 {-
  - This test suite ensures that the rewrites that HerbiePlugin performs
  - give the correct results.
@@ -27,11 +28,11 @@ test1b far near = -(2 * far * near) / (far - near)
 
 {-# ANN test1c "NoHerbie" #-}
 test1c :: Double -> Double -> Double
-test1c far near = -(if far < (negate 1.7210442634149447e81)
-    then (far / (far - near)) * 2 * near
+test1c far near = if far < -1.7210442634149447e81
+    then ((-2 * far) / (far - near)) * near
     else if far < 8.364504563556443e16
-        then (far * 2) / ((far - near) / near)
-        else (far / (far - near)) * 2 * near)
+        then -2 * far * (near / (far - near))
+        else ((-2 * far) / (far - near)) * near
 
 --------------------
 
@@ -85,16 +86,16 @@ atanh_ x = 0.5 * log ((1.0+x) / (1.0-x))
     putStrLn ""
 
 main = do
---     mkTest(test1a,test1b,-2e90,6)
---     mkTest(test1a,test1b,3,4)
---     mkTest(test1a,test1b,2e90,6)
---
---     mkTest(test1a,test1c,-2e90,6)
---     mkTest(test1a,test1c,3,4)
---     mkTest(test1a,test1c,2e90,6)
---
---     mkTest(test2a,test2b,1,2)
---
+    mkTest(test1a,test1b,-2e90,6)
+    mkTest(test1a,test1b,3,4)
+    mkTest(test1a,test1b,2e90,6)
+
+    mkTest(test1a,test1c,-2e90,6)
+    mkTest(test1a,test1c,3,4)
+    mkTest(test1a,test1c,2e90,6)
+
+    mkTest(test2a,test2b,1,2)
+
 --     mkTest(test3a,test3b,(Quaternion 1 (V3 1 2 3)),(Quaternion 2 (V3 2 3 4)))
 
 --     mkTestB(asinh,asinh_,5e-17::Complex Double)
