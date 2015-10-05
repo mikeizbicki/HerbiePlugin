@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
 
 module Herbie.ForeignInterface
     where
@@ -24,11 +24,67 @@ import Herbie.MathExpr
 
 import Prelude
 
+-- | Stores the flags that will get passed to the Herbie executable
+newtype HerbieOptions = HerbieOptions [[String]]
+    deriving (Show,Generic,NFData)
+
+opts2string :: HerbieOptions -> String
+opts2string (HerbieOptions opts) = concat $ intersperse " " $ concat opts
+
+string2opts :: String -> HerbieOptions
+string2opts xs = HerbieOptions [words xs]
+
+toggleNumerics :: HerbieOptions -> HerbieOptions
+toggleNumerics (HerbieOptions xs) = HerbieOptions $ go xs []
+    where
+        go :: [[String]] -> [[String]] -> [[String]]
+        go []                           ys = ys ++ [["-o", "rules:numerics" ]]
+        go (["-o","rules:numerics"]:xs) ys = ys ++ xs
+        go (x:xs)                       ys = go xs (x:ys)
+
+toggleRegimes :: HerbieOptions -> HerbieOptions
+toggleRegimes (HerbieOptions xs) = HerbieOptions $ go xs []
+    where
+        go :: [[String]] -> [[String]] -> [[String]]
+        go []                           ys = ys ++ [["-o", "reduce:regimes" ]]
+        go (["-o","reduce:regimes"]:xs) ys = ys ++ xs
+        go (x:xs)                       ys = go xs (x:ys)
+
+-- | This information gets stored in a separate db table for debugging purposes
+data DbgInfo = DbgInfo
+    { dbgComments   :: String
+    , modName       :: String
+    , functionName  :: String
+    , functionType  :: String
+    }
+
+-- | The result of running Herbie
+data HerbieResult a = HerbieResult
+    { cmdin  :: !a
+    , cmdout :: !a
+    , opts   :: !HerbieOptions
+    , errin  :: !Double
+    , errout :: !Double
+    }
+    deriving (Show,Generic,NFData)
+
+instance FromField a => FromRow (HerbieResult a) where
+    fromRow = HerbieResult <$> field <*> field <*> (fmap string2opts field) <*> field <*> field
+
+instance ToField a => ToRow (HerbieResult a) where
+    toRow (HerbieResult cmdin cmdout opts errin errout) = toRow
+        ( cmdin
+        , cmdout
+        , opts2string opts
+        , errin
+        , errout
+        )
+
 -- | Given a MathExpr, return a numerically stable version.
-stabilizeMathExpr :: DbgInfo -> MathExpr -> IO (StabilizerResult MathExpr)
-stabilizeMathExpr dbgInfo cmdin = do
+stabilizeMathExpr :: DbgInfo -> HerbieOptions -> MathExpr -> IO (HerbieResult MathExpr)
+stabilizeMathExpr dbgInfo opts cmdin = do
     let (cmdinLisp,varmap) = getCanonicalLispCmd $ haskellOpsToHerbieOps cmdin
-    res <- stabilizeLisp dbgInfo cmdinLisp
+    res <- stabilizeLisp dbgInfo opts cmdinLisp
     cmdout' <- do
         -- FIXME:
         -- Due to a bug in Herbie, fromCanonicalLispCmd sometimes throws an exception.
@@ -52,15 +108,15 @@ stabilizeMathExpr dbgInfo cmdin = do
 -- | Given a Lisp command, return a numerically stable version.
 -- It first checks if the command is in the global database;
 -- if it's not, then it runs "execHerbie".
-stabilizeLisp :: DbgInfo -> String -> IO (StabilizerResult String)
-stabilizeLisp dbgInfo cmd = do
-    dbResult <- lookupDatabase cmd
+stabilizeLisp :: DbgInfo -> HerbieOptions -> String -> IO (HerbieResult String)
+stabilizeLisp dbgInfo opts cmd = do
+    dbResult <- lookupDatabase opts cmd
     ret <- case dbResult of
         Just x -> do
             return x
         Nothing -> do
             putStrLn "  Not found in database.  Running Herbie..."
-            res <- execHerbie cmd
+            res <- execHerbie opts cmd
             insertDatabase res
             return res
     insertDatabaseDbgInfo dbgInfo ret
@@ -73,8 +129,8 @@ stabilizeLisp dbgInfo cmd = do
         else ret { errout = errin ret, cmdout = cmdin ret }
 
 -- | Run the `herbie` command and return the result
-execHerbie :: String -> IO (StabilizerResult String)
-execHerbie lisp = do
+execHerbie :: HerbieOptions -> String -> IO (HerbieResult String)
+execHerbie (HerbieOptions opts) lisp = do
 
     -- build the command string we will pass to Herbie
     let varstr = "("++unwords (lisp2vars lisp)++")"
@@ -90,14 +146,14 @@ execHerbie lisp = do
         -- launch Herbie with a fixed seed to ensure reproducible builds
         (_,stdout,stderr) <- readProcessWithExitCode
             "herbie-exec"
-            [ "-r", "#(1461197085 2376054483 1553562171 1611329376 2497620867 2308122621)" ]
+            (concat opts)
             stdin
 
         -- try to parse Herbie's output;
         -- if we can't parse it, that means Herbie had an error and we should abort gracefully
         ret <- try $ do
             let (line1:line2:line3:_) = lines stdout
-            let ret = StabilizerResult
+            let ret = HerbieResult
                     { errin
                         = read
                         $ drop 1
@@ -106,6 +162,8 @@ execHerbie lisp = do
                         = read
                         $ drop 1
                         $ dropWhile (/=':') line2
+                    , opts
+                        = HerbieOptions opts
                     , cmdin
                         = lisp
                     , cmdout
@@ -121,9 +179,10 @@ execHerbie lisp = do
                 putStrLn $ "WARNING in execHerbie: "++show e
                 putStrLn $ "WARNING in execHerbie: stdin="++stdin
                 putStrLn $ "WARNING in execHerbie: stdout="++stdout
-                return StabilizerResult
+                return HerbieResult
                     { errin  = 0/0
                     , errout = 0/0
+                    , opts   = HerbieOptions opts
                     , cmdin  = lisp
                     , cmdout = lisp
                     }
@@ -133,28 +192,14 @@ execHerbie lisp = do
         Just x -> return x
         Nothing -> do
             putStrLn $ "WARNING: Call to Herbie timed out after 2 minutes."
-            return $ StabilizerResult
+            return $ HerbieResult
                 { errin  = 0/0
                 , errout = 0/0
+                , opts   = HerbieOptions opts
                 , cmdin  = lisp
                 , cmdout = lisp
                 }
 
-
--- | The result of running Herbie
-data StabilizerResult a = StabilizerResult
-    { cmdin  :: !a
-    , cmdout :: !a
-    , errin  :: !Double
-    , errout :: !Double
-    }
-    deriving (Show,Generic,NFData)
-
-instance FromField a => FromRow (StabilizerResult a) where
-    fromRow = StabilizerResult <$> field <*> field <*> field <*> field
-
-instance ToField a => ToRow (StabilizerResult a) where
-    toRow (StabilizerResult cmdin cmdout errin errout) = toRow (cmdin, cmdout, errin, errout)
 
 -- | Returns a connection to the sqlite3 database
 mkConn = do
@@ -169,15 +214,15 @@ mkConn = do
 -- so the query below raises an exception.
 -- This isn't so bad, except a nasty error message gets printed,
 -- and the plugin attempts to run Herbie again (wasting a lot of time).
-lookupDatabase :: String -> IO (Maybe (StabilizerResult String))
-lookupDatabase cmdin = do
+lookupDatabase :: HerbieOptions -> String -> IO (Maybe (HerbieResult String))
+lookupDatabase opts cmdin = do
     ret <- try $ do
         conn <- mkConn
         res <- queryNamed
             conn
-            "SELECT cmdin,cmdout,errin,errout from StabilizerResults where cmdin = :cmdin"
-            [":cmdin" := cmdin]
-            :: IO [StabilizerResult String]
+            "SELECT cmdin,cmdout,opts,errin,errout from HerbieResults where cmdin = :cmdin and opts = :opts"
+            [":cmdin" := cmdin, ":opts" := opts2string opts]
+            :: IO [HerbieResult String]
         close conn
         return $ case res of
             [x] -> Just x
@@ -188,37 +233,30 @@ lookupDatabase cmdin = do
             return Nothing
         Right x -> return x
 
--- | Inserts a "StabilizerResult" into the global database of commands
-insertDatabase :: StabilizerResult String -> IO ()
+-- | Inserts a "HerbieResult" into the global database of commands
+insertDatabase :: HerbieResult String -> IO ()
 insertDatabase res = do
     ret <- try $ do
         conn <- mkConn
         execute_ conn $ fromString $
-            "CREATE TABLE IF NOT EXISTS StabilizerResults "
+            "CREATE TABLE IF NOT EXISTS HerbieResults "
             ++"( id INTEGER PRIMARY KEY"
-            ++", cmdin  TEXT UNIQUE NOT NULL"
+            ++", cmdin  TEXT        NOT NULL"
             ++", cmdout TEXT        NOT NULL"
+            ++", opts   TEXT        NOT NULL"
             ++", errin  DOUBLE      "
             ++", errout DOUBLE      "
+            ++", UNIQUE (cmdin, opts)"
             ++")"
-        execute_ conn "CREATE INDEX IF NOT EXISTS StabilizerResultsIndex ON StabilizerResults(cmdin)"
-        execute conn "INSERT INTO StabilizerResults (cmdin,cmdout,errin,errout) VALUES (?,?,?,?)" res
+        execute_ conn "CREATE INDEX IF NOT EXISTS HerbieResultsIndex ON HerbieResults(cmdin)"
+        execute conn "INSERT INTO HerbieResults (cmdin,cmdout,opts,errin,errout) VALUES (?,?,?,?,?)" res
         close conn
     case ret of
         Left (SomeException e) -> putStrLn $ "WARNING in insertDatabase: "++show e
         Right _ -> return ()
     return ()
 
-
--- | This information gets stored in a separate db table for debugging purposes
-data DbgInfo = DbgInfo
-    { dbgComments   :: String
-    , modName       :: String
-    , functionName  :: String
-    , functionType  :: String
-    }
-
-insertDatabaseDbgInfo :: DbgInfo -> StabilizerResult String -> IO ()
+insertDatabaseDbgInfo :: DbgInfo -> HerbieResult String -> IO ()
 insertDatabaseDbgInfo dbgInfo res = do
     ret <- try $ do
         conn <- mkConn
@@ -233,7 +271,7 @@ insertDatabaseDbgInfo dbgInfo res = do
             ++")"
         res <- queryNamed
             conn
-            "SELECT id,cmdout from StabilizerResults where cmdin = :cmdin"
+            "SELECT id,cmdout from HerbieResults where cmdin = :cmdin"
             [":cmdin" := cmdin res]
             :: IO [(Int,String)]
         execute conn "INSERT INTO DbgInfo (resid,dbgComments,modName,functionName,functionType) VALUES (?,?,?,?,?)" (fst $ head res,dbgComments dbgInfo,modName dbgInfo,functionName dbgInfo,functionType dbgInfo)

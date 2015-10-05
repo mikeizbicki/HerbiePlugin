@@ -43,33 +43,39 @@ instance (Monad m, HasDynFlags m) => HasDynFlags (ExceptT e m) where
 instance MonadThings m => MonadThings (ExceptT e m) where
     lookupThing name = lift $ lookupThing name
 
+data ExceptionType
+    = NotInScope String
+    | BadCxt String
+    | OtherException String
+
+
 ----------------------------------------
 -- core manipulation
 
 -- | Converts a string into a Core variable
-getVar :: ModGuts -> String -> ExceptT String CoreM Var
+getVar :: ModGuts -> String -> ExceptT ExceptionType CoreM Var
 getVar guts opstr = do
-    let opname = getName guts opstr
+    opname <- getName guts opstr
     hscenv <- lift getHscEnv
     dflags <- getDynFlags
     eps <- liftIO $ hscEPS hscenv
     optype <- case lookupNameEnv (eps_PTE eps) opname of
             Just (AnId i) -> return $ varType i
-            _ -> throwError $ "  WARNING: variable \""++opstr++"\" not in scope"
+            _ -> throwError (NotInScope opstr)
     return $ mkGlobalVar VanillaId opname optype vanillaIdInfo
 
     where
-        getName :: ModGuts -> String -> Name
+        getName :: ModGuts -> String -> ExceptT ExceptionType CoreM Name
         getName guts str = case filter isCorrectVar (concat $ occEnvElts (mg_rdr_env guts)) of
             xs -> if not (null xs)
-                then gre_name $ head xs
-                else error $ "getName: '"++str++"'"
+                then return $ gre_name $ head xs
+                else throwError (NotInScope str)
             where
                 isCorrectVar x = getString (gre_name x) == str
                               && (str == "abs" || case gre_par x of NoParent -> False; _ -> True)
 
 -- | Like "decorateFunction", but first finds the function variable given a string.
-getDecoratedFunction :: ModGuts -> String -> Type -> [CoreExpr] -> ExceptT String CoreM CoreExpr
+getDecoratedFunction :: ModGuts -> String -> Type -> [CoreExpr] -> ExceptT ExceptionType CoreM CoreExpr
 getDecoratedFunction guts str t preds = do
     f <- getVar guts str
     decorateFunction guts f t preds
@@ -78,7 +84,7 @@ getDecoratedFunction guts str t preds = do
 -- the type the function is being applied to,
 -- and all in scope predicates,
 -- apply the type and any needed dictionaries to the function.
-decorateFunction :: ModGuts -> Var -> Type -> [CoreExpr] -> ExceptT String CoreM CoreExpr
+decorateFunction :: ModGuts -> Var -> Type -> [CoreExpr] -> ExceptT ExceptionType CoreM CoreExpr
 decorateFunction guts f t preds = do
     let ([v],unquantified) = extractQuantifiers $ varType f
         (cxt,_) = extractContext unquantified
@@ -88,7 +94,7 @@ decorateFunction guts f t preds = do
 
     return $ mkApps (App (Var f) (Type t)) cxt''
     where
-        getDict :: PredType -> ExceptT String CoreM CoreExpr
+        getDict :: PredType -> ExceptT ExceptionType CoreM CoreExpr
         getDict pred = do
             catchError
                 (getDictionary guts pred)
@@ -96,7 +102,7 @@ decorateFunction guts f t preds = do
 
 -- | Given a non-polymorphic PredType (e.g. `Num Float`),
 -- return the corresponding dictionary.
-getDictionary :: ModGuts -> Type -> ExceptT String CoreM CoreExpr
+getDictionary :: ModGuts -> Type -> ExceptT ExceptionType CoreM CoreExpr
 getDictionary guts dictTy = do
     let dictVar = mkGlobalVar
             VanillaId
@@ -128,21 +134,19 @@ getDictionary guts dictTy = do
 
     case bnds of
         [NonRec _ dict] -> return dict
-        otherwise -> throwError $
-            "  WARNING: Cannot satisfy the constraint: "++dbg dictTy
+        otherwise -> throwError $ BadCxt $ dbg dictTy
 
 -- | Given a predicate for which we don't have evidence
 -- and a list of expressions that contain evidence for predicates,
 -- construct an expression that contains evidence for the given predicate.
-getPredEvidence :: ModGuts -> PredType -> [CoreExpr] -> ExceptT String CoreM CoreExpr
+getPredEvidence :: ModGuts -> PredType -> [CoreExpr] -> ExceptT ExceptionType CoreM CoreExpr
 getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
     where
 
-        go :: [(CoreExpr,Type)] -> ExceptT String CoreM CoreExpr
+        go :: [(CoreExpr,Type)] -> ExceptT ExceptionType CoreM CoreExpr
 
         -- We've looked at all the evidence, but didn't find anything
-        go [] = throwError $
-            "  WARNING: Cannot satisfy the constraint: "++dbg pred
+        go [] = throwError $ BadCxt $ dbg pred
 
         -- Recursively descend into all the available predicates.
         -- The list tracks both the evidence expression (this will change in recursive descent),
@@ -240,7 +244,7 @@ getPredEvidence guts pred evidenceExprs = go $ prepEvidence evidenceExprs
 -- | Given some evidence, an expression, and a type:
 -- try to prove that the expression can be cast to the type.
 -- If it can, return the cast expression.
-castToType :: [CoreExpr] -> Type -> CoreExpr -> ExceptT String CoreM CoreExpr
+castToType :: [CoreExpr] -> Type -> CoreExpr -> ExceptT ExceptionType CoreM CoreExpr
 castToType xs castTy inputExpr = if exprType inputExpr == castTy
     then return inputExpr
     else go $ prepEvidence xs
@@ -248,10 +252,10 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
     where
 
 
-        go :: [(CoreExpr,Type)] -> ExceptT String CoreM CoreExpr
+        go :: [(CoreExpr,Type)] -> ExceptT ExceptionType CoreM CoreExpr
 
         -- base case: we've searched through all the evidence, but couldn't create a cast
-        go [] = throwError $
+        go [] = throwError $ OtherException $
             "  WARNING: Could not cast expression of type "++dbg (exprType inputExpr)++" to "++dbg castTy
 
         -- recursively try each evidence expression looking for a cast
@@ -269,7 +273,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                     -- on the inputTyRHS and castTyRHS types.
                     -- As long as the type constructors match,
                     -- we might be able to do a cast at any level of the peeling
-                    goEqPred :: [TyCon] -> Type -> Type -> ExceptT String CoreM CoreExpr
+                    goEqPred :: [TyCon] -> Type -> Type -> ExceptT ExceptionType CoreM CoreExpr
                     goEqPred tyCons castTyRHS inputTyRHS = if
                         | t1==castTyRHS && t2==inputTyRHS -> mkCast True
                         | t2==castTyRHS && t1==inputTyRHS -> mkCast False
@@ -290,7 +294,7 @@ castToType xs castTy inputExpr = if exprType inputExpr == castTy
                             -- but the final Coercion needs to be Representational.
                             -- mkSubCo converts from Nominal into Representational.
                             -- See https://ghc.haskell.org/trac/ghc/wiki/RolesImplementation
-                            mkCast :: Bool -> ExceptT String CoreM CoreExpr
+                            mkCast :: Bool -> ExceptT ExceptionType CoreM CoreExpr
                             mkCast isFlipped = do
                                 coboxUniq <- getUniqueM
                                 let coboxName = mkSystemName coboxUniq (mkVarOcc "cobox")

@@ -75,6 +75,9 @@ test4 x y = Yo
     , yo_y2x = y * y * x
     }
 
+test5 :: Float -> Float -> Float
+test5 x y = (x * x) + (2 * x * y) + (y * y)
+
 --------------------------------------------------------------------------------
 
 -- asinh_ :: Complex Double -> Complex Double

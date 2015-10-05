@@ -19,6 +19,7 @@ import TcSimplify
 import Control.Monad
 import Control.Monad.Except
 import Data.Data
+import Data.List
 import Data.Maybe
 import Data.Typeable
 
@@ -155,36 +156,66 @@ modBind opts guts bndr@(NonRec b e) = do
                         ++ " :: "
                         ++ showSDoc dflags (ppr $ varType b)
                     putMsgS $ "  original expression = "++pprMathInfo mathInfo
-                    let dbgInfo = DbgInfo
-                            { dbgComments  = concat opts
-                            , modName      = showSDoc dflags (ppr $ moduleName $ mg_module guts)
-                            , functionName = showSDoc dflags (ppr b)
-                            , functionType = showSDoc dflags (ppr $ varType b)
-                            }
-                    res <- liftIO $ stabilizeMathExpr dbgInfo $ getMathExpr mathInfo
-                    let mathInfo' = mathInfo { getMathExpr = cmdout res }
 
-                    -- Display the improved expression if found
-                    let canRewrite = True -- errin res-errout res > optsTol pluginOpts
-                    if canRewrite
-                        then do
-                            putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
-                            putMsgS $ "  original error = "++show (errin res)++" bits"
-                            putMsgS $ "  improved error = "++show (errout res)++" bits"
-                        else do
-                            putMsgS $ "  Herbie could not improve the stability of the original expression"
+                    simplifyExpression $ HerbieOptions
+                        [ [ "-r", "#(1461197085 2376054483 1553562171 1611329376 2497620867 2308122621)" ]
+                        , [ "-o", "rules:numerics" ]
+                        ]
 
-                    -- Rewrite the expression
-                    if not (optsRewrite pluginOpts) || not canRewrite
-                        then return e
-                        else do
-                            ret <- runExceptT $ mathInfo2expr guts mathInfo'
-                            case ret of
-                                Left str -> do
-                                    putMsgS "  WARNING: Not substituting the improved expression into your code"
-                                    putMsgS str
-                                    return e
-                                Right e' -> return e'
+                    where
+                        simplifyExpression :: HerbieOptions -> CoreM CoreExpr
+                        simplifyExpression herbieOpts = do
+                            let dbgInfo = DbgInfo
+                                    { dbgComments  = concat opts
+                                    , modName      = showSDoc dflags (ppr $ moduleName $ mg_module guts)
+                                    , functionName = showSDoc dflags (ppr b)
+                                    , functionType = showSDoc dflags (ppr $ varType b)
+                                    }
+                            res <- liftIO $ stabilizeMathExpr dbgInfo herbieOpts $ getMathExpr mathInfo
+                            let mathInfo' = mathInfo { getMathExpr = cmdout res }
+
+                            -- Display the improved expression if found
+                            let canRewrite = errin res-errout res > optsTol pluginOpts
+                            if canRewrite
+                                then do
+                                    putMsgS $ "  improved expression = "++pprMathInfo mathInfo'
+                                    putMsgS $ "  original error = "++show (errin res)++" bits"
+                                    putMsgS $ "  improved error = "++show (errout res)++" bits"
+                                else do
+                                    putMsgS $ "  Herbie could not improve the stability of the original expression"
+
+                            -- Rewrite the expression
+                            if not (optsRewrite pluginOpts) || not canRewrite
+                                then return e
+                                else do
+                                    ret <- runExceptT $ mathInfo2expr guts mathInfo'
+                                    case ret of
+                                        Left (NotInScope var) -> do
+                                            putMsgS $ "  WARNING: Variable "++var++" not in scope"
+                                            if var `elem` fancyOps
+                                                then do
+                                                    putMsgS "  WARNING: Disabling fancy numerical operations and retrying"
+                                                    simplifyExpression $ toggleNumerics herbieOpts
+                                                else do
+                                                    putMsgS "  WARNING: Not substituting the improved expression into your code"
+                                                    return e
+
+                                        Left (BadCxt cxt) -> do
+                                            putMsgS $ "  WARNING: Cannot satisfy the constraint "++cxt
+                                            if "Ord" `isInfixOf` cxt
+                                                then do
+                                                    putMsgS "  WARNING: Disabling if statements and retrying"
+                                                    simplifyExpression $ toggleRegimes herbieOpts
+                                                else do
+                                                    putMsgS "  WARNING: Not substituting the improved expression into your code"
+                                                    return e
+
+                                        Left (OtherException str) -> do
+                                            putMsgS "  WARNING: Not substituting the improved expression into your code"
+                                            putMsgS str
+                                            return e
+
+                                        Right e' -> return e'
 
 -- | Return a list with the given variable if the variable is a dictionary or tuple of dictionaries,
 -- otherwise return [].

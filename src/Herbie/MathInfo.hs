@@ -165,7 +165,7 @@ varTypeIfValidExpr e = case e of
 mkMathInfo :: DynFlags -> [Var] -> Type -> Expr Var -> Maybe MathInfo
 mkMathInfo dflags dicts bndType e = case varTypeIfValidExpr e of
         Nothing -> Nothing
-        Just t -> if mathExprDepth getMathExpr>1 && lispHasRepeatVars (mathExpr2lisp getMathExpr)
+        Just t -> if mathExprDepth getMathExpr>1 || lispHasRepeatVars (mathExpr2lisp getMathExpr)
             then Just $ MathInfo
                 getMathExpr
                 ParamType
@@ -233,7 +233,7 @@ mkMathInfo dflags dicts bndType e = case varTypeIfValidExpr e of
         go e exprs = (ELeaf $ expr2str dflags e,[(expr2str dflags e,e)])
 
 -- | Converts a MathInfo back into a CoreExpr
-mathInfo2expr :: ModGuts -> MathInfo -> ExceptT String CoreM CoreExpr
+mathInfo2expr :: ModGuts -> MathInfo -> ExceptT ExceptionType CoreM CoreExpr
 mathInfo2expr guts herbie = go (getMathExpr herbie)
     where
         pt = getParamType herbie

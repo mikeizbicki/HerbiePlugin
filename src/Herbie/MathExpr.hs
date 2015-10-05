@@ -37,6 +37,8 @@ monOpList =
 binOpList = [ "^", "**", "^^", "/", "-", "expt" ] ++ commutativeOpList
 commutativeOpList = [ "*", "+"] -- , "max", "min" ]
 
+fancyOps = [ "hypot", "log1p", "expm1" ]
+
 --------------------------------------------------------------------------------
 
 -- | Stores the AST for a math expression in a generic form that requires no knowledge of Core syntax.
