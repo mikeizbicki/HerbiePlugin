@@ -78,7 +78,9 @@ pprMathInfo mathInfo = go 1 False $ getMathExpr mathInfo
                     EMonOp "negate" e1 ->     "-"++go i False e1
                     EMonOp op       e1 -> op++" "++go i True  e1
 
-                    EBinOp op e1 e2 -> go i parens1 e1++" "++op++" "++go i parens2 e2
+                    EBinOp op e1 e2 -> if op `elem` fancyOps
+                        then op++" "++go i True e1++" "++go i True e2
+                        else go i parens1 e1++" "++op++" "++go i parens2 e2
                         where
                             parens1 = case e1 of
 --                                 (EBinOp op' _ _) -> op/=op'

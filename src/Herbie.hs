@@ -191,7 +191,7 @@ modBind opts guts bndr@(NonRec b e) = do
                                     ret <- runExceptT $ mathInfo2expr guts mathInfo'
                                     case ret of
                                         Left (NotInScope var) -> do
-                                            putMsgS $ "  WARNING: Variable "++var++" not in scope"
+                                            putMsgS $ "  WARNING: Variable \""++var++"\" not in scope"
                                             if var `elem` fancyOps
                                                 then do
                                                     putMsgS "  WARNING: Disabling fancy numerical operations and retrying"
