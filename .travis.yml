@@ -41,8 +41,8 @@ install:
 
  # manually download the expression database
  - wget https://github.com/mikeizbicki/HerbiePlugin/raw/master/data/Herbie.db
- - mkdir -p $HOME/.cabal/share/x86_64-linux-ghc-$GHCVER/HerbiePlugin-0.1.0.0/
- - cp Herbie.db $HOME/.cabal/share/x86_64-linux-ghc-$GHCVER/HerbiePlugin-0.1.0.0/
+ - mkdir -p $HOME/.cabal/share/x86_64-linux-ghc-$GHCVER/HerbiePlugin-0.2.0.0/
+ - cp Herbie.db $HOME/.cabal/share/x86_64-linux-ghc-$GHCVER/HerbiePlugin-0.2.0.0/
 
  # display versions
  - cabal --version

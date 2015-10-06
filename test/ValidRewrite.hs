@@ -34,6 +34,7 @@ test1c far near = if far < -1.7210442634149447e81
         then -2 * far * (near / (far - near))
         else ((-2 * far) / (far - near)) * near
 
+{-
 --------------------
 
 test2a :: Double -> Double -> Double
@@ -90,6 +91,7 @@ atanh_ :: Double -> Double
 atanh_ x = 0.5 * log ((1.0+x) / (1.0-x))
 
 --------------------------------------------------------------------------------
+-}
 
 #define mkTest(f1,f2,a,b) \
     putStrLn $ "mkTest: " ++ show (f1 (a) (b)); \
@@ -110,6 +112,7 @@ main = do
     mkTest(test1a,test1c,3,4)
     mkTest(test1a,test1c,2e90,6)
 
+{-
     mkTest(test2a,test2b,1,2)
 
 --     mkTest(test3a,test3b,(Quaternion 1 (V3 1 2 3)),(Quaternion 2 (V3 2 3 4)))
@@ -117,6 +120,7 @@ main = do
 --     mkTestB(asinh,asinh_,5e-17::Complex Double)
 --     mkTestB(acosh,acosh_,5e-17::Complex Double)
     mkTestB(atanh,atanh_,5e-17::Double)
+-}
 
     putStrLn "done"
 

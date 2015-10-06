@@ -176,9 +176,9 @@ execHerbie (HerbieOptions opts) lisp = do
 
         case ret of
             Left (SomeException e) -> do
-                putStrLn $ "WARNING in execHerbie: "++show e
-                putStrLn $ "WARNING in execHerbie: stdin="++stdin
-                putStrLn $ "WARNING in execHerbie: stdout="++stdout
+                putStrLn $ "  WARNING: error when calling `herbie-exec`"
+                putStrLn $ "    stdin="++stdin
+                putStrLn $ "    stdout="++stdout
                 return HerbieResult
                     { errin  = 0/0
                     , errout = 0/0
@@ -229,7 +229,7 @@ lookupDatabase opts cmdin = do
             []  -> Nothing
     case ret of
         Left (SomeException e) -> do
-            putStrLn $ "WARNING in lookupDatabase: "++show e
+            putStrLn $ "  WARNING in lookupDatabase: "++show e
             return Nothing
         Right x -> return x
 
@@ -252,7 +252,7 @@ insertDatabase res = do
         execute conn "INSERT INTO HerbieResults (cmdin,cmdout,opts,errin,errout) VALUES (?,?,?,?,?)" res
         close conn
     case ret of
-        Left (SomeException e) -> putStrLn $ "WARNING in insertDatabase: "++show e
+        Left (SomeException e) -> putStrLn $ "  WARNING in insertDatabase: "++show e
         Right _ -> return ()
     return ()
 
